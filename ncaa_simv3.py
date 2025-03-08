@@ -160,25 +160,64 @@ class NcaaGameSimulatorV3:
     def normalize_team_stats(self):
         """
         Normalize team stats using feature scaling to improve comparison.
-        Only applied to numeric columns that aren't already on a fixed scale.
+        Ensures all important statistics used in the simulation are properly normalized.
         """
-        # Select columns that should be normalized (numeric columns only)
+        # Define the key statistics that should be normalized
+        # These are the stats used in our weighting system and simulation logic
+        key_stats = [
+            # Efficiency Metrics
+            'AdjO', 'AdjD', 'SOS AdjO', 'SOS AdjD',
+            
+            # Four Factors
+            'eFG%', 'TOV%', 'ORB%', 'FTR',
+            
+            # Defensive Stats
+            'Blk%', 'Stl%', 'Def 2P%', 'Def 3P%', 'Def FT%',
+            
+            # Offensive Tendencies
+            'NST%', 'A%', '3PA%',
+            
+            # Height
+            'Hgt',
+            
+            # Points Distribution
+            '%2P', '%3P', '%FT',
+            
+            # Tempo
+            'Tempo'
+        ]
+        
+        # Also include any numeric columns that might be in the dataset
         numeric_cols = self.team_stats.select_dtypes(include=np.number).columns.tolist()
         
-        # Remove columns that shouldn't be normalized
-        skip_cols = ['team_name_lower', 'Rk', 'W-L']
-        normalize_cols = [col for col in numeric_cols if col not in skip_cols]
+        # Combine and deduplicate
+        all_stats = list(set(key_stats + numeric_cols))
         
-        if normalize_cols:
-            # Create normalized versions of important stats
-            for col in normalize_cols:
-                if col in self.team_stats.columns:
-                    # Calculate mean and std for normalization
-                    mean = self.team_stats[col].mean()
-                    std = self.team_stats[col].std()
-                    if std > 0:  # Avoid division by zero
-                        # Create normalized column (z-score)
-                        self.team_stats[f"{col}_norm"] = (self.team_stats[col] - mean) / std
+        # Remove columns that shouldn't be normalized
+        skip_cols = ['team_name_lower', 'Rk', 'W-L', 'conf_tier']
+        normalize_cols = [col for col in all_stats if col not in skip_cols]
+        
+        # Track which stats were normalized
+        normalized_stats = []
+        
+        # Normalize each column
+        for col in normalize_cols:
+            if col in self.team_stats.columns:
+                # Calculate mean and std for normalization
+                mean = self.team_stats[col].mean()
+                std = self.team_stats[col].std()
+                if std > 0:  # Avoid division by zero
+                    # Create normalized column (z-score)
+                    self.team_stats[f"{col}_norm"] = (self.team_stats[col] - mean) / std
+                    normalized_stats.append(col)
+        
+        print(f"Normalized {len(normalized_stats)} statistics: {', '.join(normalized_stats[:5])}{'...' if len(normalized_stats) > 5 else ''}")
+        
+        # Check if any key stats are missing
+        missing_stats = [stat for stat in key_stats if stat not in self.team_stats.columns]
+        if missing_stats:
+            print(f"Warning: Some key statistics are missing from the dataset: {', '.join(missing_stats[:5])}{'...' if len(missing_stats) > 5 else ''}")
+            print("The simulator will still work but may be less accurate.")
     
     def get_conference_tier(self, conference):
         """Determine the tier of a conference for home court advantage"""
@@ -353,6 +392,8 @@ class NcaaGameSimulatorV3:
             float: Team strength score
         """
         strength = 0
+        used_stats = []
+        missing_stats = []
         
         # Apply weights to each statistic - prioritizing normalized versions if available
         for stat, weight in self.weights.items():
@@ -364,6 +405,7 @@ class NcaaGameSimulatorV3:
                 # Cap between 0 and 1
                 norm_value = max(0, min(1, norm_value))
                 strength += weight * norm_value
+                used_stats.append(f"{stat} (normalized)")
             elif stat in team_stats and not pd.isna(team_stats[stat]):
                 # Fall back to non-normalized stats with manual normalization
                 if stat in ["TOV%", "AdjD", "Def 2P%", "Def 3P%", "Def FT%"]:
@@ -397,6 +439,17 @@ class NcaaGameSimulatorV3:
                 # Ensure values are between 0 and 1
                 norm_value = max(0, min(1, norm_value))
                 strength += weight * norm_value
+                used_stats.append(stat)
+            else:
+                # Stat is missing - track it but don't penalize
+                missing_stats.append(stat)
+        
+        # If this is the first calculation, print some debug info
+        if getattr(self, '_first_strength_calc', True):
+            print(f"Using {len(used_stats)} statistics for strength calculation")
+            if missing_stats:
+                print(f"Warning: {len(missing_stats)} statistics are missing: {', '.join(missing_stats[:5])}{'...' if len(missing_stats) > 5 else ''}")
+            self._first_strength_calc = False
         
         return strength
     
