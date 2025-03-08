@@ -548,46 +548,59 @@ class NcaaGameSimulatorV3:
                 return stats[stat_name]
             return default_value
         
-        # Get offensive and defensive ratings with fallbacks
-        team1_off = safe_get_stat(team1_stats, "AdjO", 105.0)  # Higher default
-        team1_def = safe_get_stat(team1_stats, "AdjD", 95.0)   # Lower default
-        team2_off = safe_get_stat(team2_stats, "AdjO", 105.0)  # Higher default
-        team2_def = safe_get_stat(team2_stats, "AdjD", 95.0)   # Lower default
+        # Use adjusted defaults to create more modern, higher-scoring games
+        # Modern NCAA average offensive efficiency is ~107-110
+        team1_off = safe_get_stat(team1_stats, "AdjO", 107.0)
+        team1_def = safe_get_stat(team1_stats, "AdjD", 97.0)
+        team2_off = safe_get_stat(team2_stats, "AdjO", 107.0)
+        team2_def = safe_get_stat(team2_stats, "AdjD", 97.0)
         
-        # Get tempo with fallback - use a higher default tempo
-        team1_tempo = safe_get_stat(team1_stats, "Tempo", 70.0)
-        team2_tempo = safe_get_stat(team2_stats, "Tempo", 70.0)
+        # Get tempo with appropriate defaults (average NCAA tempo is ~68-70)
+        team1_tempo = safe_get_stat(team1_stats, "Tempo", 68.5)
+        team2_tempo = safe_get_stat(team2_stats, "Tempo", 68.5)
         
-        # Calculate expected points
-        # Use a weighted average of team tempos, with a minimum baseline
-        avg_tempo = max(70.0, (team1_tempo + team2_tempo) / 2)
+        # Small chance of an unusually paced game (fast or slow)
+        pace_variation = random.random()
+        if pace_variation > 0.9:  # 10% chance of unusual pace
+            # Very fast or very slow game
+            tempo_modifier = 1.15 if random.random() > 0.5 else 0.85
+            team1_tempo *= tempo_modifier
+            team2_tempo *= tempo_modifier
         
-        # Apply a small random variation to tempo
-        possessions = avg_tempo * (1 + np.random.normal(0, 0.05))
+        # Calculate game tempo as weighted average of both teams
+        # Teams with higher tempo exert more influence on game pace
+        total_tempo = team1_tempo + team2_tempo
+        team1_tempo_weight = team1_tempo / total_tempo
+        team2_tempo_weight = team2_tempo / total_tempo
         
-        # Calculate expected points per possession
-        # Use a more direct approach based on offensive and defensive ratings
-        team1_off_ppp = team1_off / 100
-        team2_def_ppp = team2_def / 100
-        team2_off_ppp = team2_off / 100
-        team1_def_ppp = team1_def / 100
+        # Calculate actual possessions with both teams' influence
+        possessions = (team1_tempo * team1_tempo_weight) + (team2_tempo * team2_tempo_weight)
         
-        # Calculate expected points with adjustment for opponent
-        # Weighted more toward offensive efficiency for more realistic scoring
-        team1_expected_ppp = (team1_off_ppp * 0.6) + ((1 - team2_def_ppp) * 0.4)
-        team2_expected_ppp = (team2_off_ppp * 0.6) + ((1 - team1_def_ppp) * 0.4)
+        # Random game-to-game variation in pace
+        possessions *= (1 + np.random.normal(0, 0.06))  # 6% standard deviation
         
-        # Calculate expected raw scores - ensure realistic base scores
-        # Scale up the scores to match modern college basketball
-        team1_raw_score = team1_expected_ppp * possessions * 1.1  # 10% boost
-        team2_raw_score = team2_expected_ppp * possessions * 1.1  # 10% boost
+        # Adjust offensive and defensive ratings for matchup and game style
+        # Offensive advantage over defense varies by matchup
+        offense_advantage = 1.05  # Offense has slight advantage in modern college basketball
         
-        # Apply random variation
-        # More variation for rivalry games
-        std_dev = 5.0  # Increased standard deviation
+        # Calculate effective offensive and defensive ratings for the matchup
+        team1_eff_off = team1_off * offense_advantage
+        team2_eff_off = team2_off * offense_advantage
+        
+        # Calculate expected points per possession with proper weighting
+        team1_ppp = (team1_eff_off / team2_def) * (105 / 100)
+        team2_ppp = (team2_eff_off / team1_def) * (105 / 100)
+        
+        # Calculate raw scores based on possessions
+        team1_raw_score = team1_ppp * possessions
+        team2_raw_score = team2_ppp * possessions
+        
+        # Apply random variation - more in key games
+        std_dev = 6.0  # Standard deviation (points)
         if is_rivalry:
-            std_dev = 7.0  # Even more variation for rivalries
+            std_dev = 8.0  # More variation in rivalry games
         
+        # Random team performance factors
         team1_score = np.random.normal(team1_raw_score, std_dev)
         team2_score = np.random.normal(team2_raw_score, std_dev)
         
@@ -598,7 +611,7 @@ class NcaaGameSimulatorV3:
         # Check for overtime
         is_overtime = False
         if abs(team1_final - team2_final) <= 3:
-            # Close game - small chance of overtime (5%)
+            # Close game - chance of overtime (5%)
             if random.random() < 0.05:
                 is_overtime = True
                 # Add overtime points (typically 7-10 points per team in OT)
@@ -625,45 +638,58 @@ class NcaaGameSimulatorV3:
     
     def create_realistic_score(self, raw_score):
         """
-        Convert a raw score to a realistic basketball score
+        Convert a raw score to a realistic basketball score with natural distribution
         """
-        # Ensure minimum score is at least 60 points (very low scoring games are rare)
-        raw_score = max(60, raw_score)
+        # Instead of a hard minimum, use a "soft minimum" approach
+        # This gradually increases probability of higher scores when raw_score is low
+        if raw_score < 65:
+            # Apply a logarithmic transformation to low scores
+            # This spreads out the scores below our target minimum instead of clustering them
+            boost_factor = 1.0 - (raw_score / 65)  # 0 to 1 scale for how far below minimum
+            boost_amount = boost_factor * 15  # Up to 15 points of boost
+            
+            # Add random boost based on how far below minimum (higher boost for lower scores)
+            raw_score += boost_amount * random.random()
         
-        # Round to nearest integer
-        score = round(raw_score)
+        # Apply normal distribution adjustment centered around realistic scores
+        # This makes scores closer to realistic ranges more likely
+        college_mean = 75  # Average NCAA score in recent seasons
+        raw_score = raw_score * 0.85 + college_mean * 0.15  # 15% regression to mean
         
-        # Basketball scores tend to end in certain digits more often
+        # Round to integer, but keep decimal part for last-digit probability
+        score_whole = int(raw_score)
+        score_fraction = raw_score - score_whole
+        
+        # Basketball scores have specific patterns in their last digits
         # Adjust the last digit based on probability
-        last_digit = score % 10
+        last_digit = score_whole % 10
         
-        # Probability distribution for last digits in basketball scores
-        # Based on analysis of historical NCAA scores
+        # Probability mapping for last digits in basketball scores
         digit_probs = {
-            0: 0.15,  # Scores ending in 0 are common
+            0: 0.15,  # Scores ending in 0 are common (free throws and even-numbered baskets)
             1: 0.08,
-            2: 0.10,
-            3: 0.09,
-            4: 0.10,
-            5: 0.12,  # Scores ending in 5 are somewhat common
+            2: 0.11,  # 2-point baskets
+            3: 0.08,
+            4: 0.09,
+            5: 0.13,  # Scores ending in 5 are somewhat common (combo of FTs and 2pts)
             6: 0.09,
-            7: 0.10,
-            8: 0.09,
-            9: 0.08
+            7: 0.10,  # 3-point basket + 2-point scores
+            8: 0.10,  # Multiple 2-point scores
+            9: 0.07
         }
         
-        # Determine if we should change the last digit
-        if random.random() > digit_probs[last_digit]:
-            # Choose a new last digit based on probabilities
+        # Use the fractional part to determine whether to adjust the last digit
+        if random.random() < 0.7:  # 70% of scores will have this adjustment
+            # Weight random choice based on digit probabilities
             new_last_digit = random.choices(
                 list(digit_probs.keys()),
                 weights=list(digit_probs.values())
             )[0]
             
             # Apply the new last digit
-            score = score - last_digit + new_last_digit
+            score_whole = score_whole - last_digit + new_last_digit
         
-        return score
+        return score_whole
     
     def run_simulation(self, num_simulations=50000):
         """
