@@ -24,42 +24,28 @@ class NcaaGameSimulatorV3:
         self.stats_dir = stats_dir
         self.team_stats = None
         
-        # Refined weights based on predictive analysis
+        # Constants for score calculation
+        self.min_realistic_score = 50  # Minimum realistic score
+        self.max_realistic_score = 120  # Maximum realistic score
+        self.score_mean = 75  # Average NCAA score
+        
+        # Weights for different statistics in strength calculation
         self.weights = {
-            # Efficiency Metrics (65%)
-            'AdjO': 0.30,  # Increased from 0.25
-            'AdjD': 0.30,  # Increased from 0.25
-            'SOS AdjO': 0.03,  # Decreased from 0.05
-            'SOS AdjD': 0.02,  # Decreased from 0.05
-            
-            # Four Factors (18%)
-            'eFG%': 0.06,  # Increased from 0.05
-            'TOV%': 0.04,
-            'ORB%': 0.05,  # Increased from 0.04
-            'FTR': 0.03,  # Decreased from 0.04
-            
-            # Defensive Stats (12%)
-            'Blk%': 0.02,  # Decreased from 0.03
-            'Stl%': 0.03,
-            'Def 2P%': 0.03,
-            'Def 3P%': 0.03,
-            'Def FT%': 0.01,  # Decreased from 0.02
-            
-            # Offensive Tendencies (4%)
-            'NST%': 0.01,
-            'A%': 0.01,
-            '3PA%': 0.02,
-            
-            # Height (1%)
-            'Hgt': 0.01,
-            
-            # Points Distribution (unchanged)
-            '%2P': 0.004,
-            '%3P': 0.003,
-            '%FT': 0.003,
-            
-            # Tempo is used directly for possessions calculation
-            'Tempo': 0.0
+            "AdjO": 0.20,         # Adjusted offensive efficiency
+            "AdjD": 0.20,         # Adjusted defensive efficiency
+            "Tempo": 0.05,        # Pace of play
+            "eFG%": 0.10,         # Effective field goal percentage
+            "TOV%": 0.05,         # Turnover percentage
+            "ORB%": 0.05,         # Offensive rebound percentage
+            "FTR": 0.05,          # Free throw rate
+            "3P%": 0.05,          # Three-point percentage
+            "2P%": 0.05,          # Two-point percentage
+            "FT%": 0.05,          # Free throw percentage
+            "Blk%": 0.03,         # Block percentage
+            "Stl%": 0.03,         # Steal percentage
+            "Hgt": 0.04,          # Team height
+            "SOS AdjO": 0.03,     # Strength of schedule (offensive)
+            "SOS AdjD": 0.02      # Strength of schedule (defensive)
         }
         
         # More nuanced home court advantage based on conference tiers
@@ -83,16 +69,6 @@ class NcaaGameSimulatorV3:
         
         # Track historical rivalry data
         self.rivalry_boost = 0.03  # 3% boost for historical rivals
-        
-        # Typical scoring ranges - slightly refined
-        self.score_mean = 72.0  # Updated from 71.5
-        self.score_std_dev = 8.0  # Updated from 8.5
-        self.min_realistic_score = 55  # Increased from 50
-        self.max_realistic_score = 95  # Increased from 90
-        
-        # Upset parameters
-        self.base_upset_chance = 0.15  # Baseline chance for upset factors
-        self.min_upset_chance = 0.03  # Minimum upset chance even for big mismatches
         
         # Possessions parameters
         self.poss_adjustment = 0.96  # Slightly increased from 0.95
@@ -596,9 +572,9 @@ class NcaaGameSimulatorV3:
         team1_expected_ppp = (team1_off_ppp + (1 - team2_def_ppp)) / 2
         team2_expected_ppp = (team2_off_ppp + (1 - team1_def_ppp)) / 2
         
-        # Calculate expected raw scores
-        team1_raw_score = team1_expected_ppp * possessions
-        team2_raw_score = team2_expected_ppp * possessions
+        # Calculate expected raw scores - ensure realistic base scores
+        team1_raw_score = max(60, team1_expected_ppp * possessions)
+        team2_raw_score = max(60, team2_expected_ppp * possessions)
         
         # Apply random variation
         # More variation for rivalry games
@@ -616,8 +592,8 @@ class NcaaGameSimulatorV3:
         # Check for overtime
         is_overtime = False
         if abs(team1_final - team2_final) <= 3:
-            # Close game - small chance of overtime
-            if random.random() < 0.15:
+            # Close game - small chance of overtime (5%)
+            if random.random() < 0.05:
                 is_overtime = True
                 # Add overtime points (typically 7-10 points per team in OT)
                 ot_points1 = random.randint(5, 12)
@@ -632,64 +608,56 @@ class NcaaGameSimulatorV3:
                 team1_final += ot_points1
                 team2_final += ot_points2
         
+        # Ensure no ties in final score
+        if team1_final == team2_final:
+            if random.random() < team1_win_prob:
+                team1_final += 1
+            else:
+                team2_final += 1
+        
         return team1_final, team2_final, is_overtime
     
     def create_realistic_score(self, raw_score):
         """
-        Transform a raw score into a realistic college basketball score.
-        This uses a combination of statistical methods to create a more
-        natural score distribution centered around real college basketball scoring.
-        
-        Args:
-            raw_score (float): The raw calculated score
-            
-        Returns:
-            int: A realistic basketball score
+        Convert a raw score to a realistic basketball score
         """
-        # Step 1: Initial adjustment based on historical NCAA scoring patterns
-        # Apply sigmoid-like transformation to naturally constrain scores
-        # to realistic ranges while preserving relative team strength
+        # Ensure minimum score is at least 50 points (very low scoring games are rare)
+        raw_score = max(50, raw_score)
         
-        # Map extreme scores toward a realistic range
-        if raw_score < self.score_mean - 20:
-            # Very low scores get boosted
-            adjusted_score = self.min_realistic_score + (raw_score - (self.score_mean - 20)) * 0.5
-        elif raw_score > self.score_mean + 20:
-            # Very high scores get dampened
-            adjusted_score = self.max_realistic_score - (self.max_realistic_score - (self.score_mean + 20)) * np.exp(-(raw_score - (self.score_mean + 20)) / 15)
-        else:
-            # Scores in normal range are mostly preserved
-            adjusted_score = raw_score
+        # Round to nearest integer
+        score = round(raw_score)
+        
+        # Basketball scores tend to end in certain digits more often
+        # Adjust the last digit based on probability
+        last_digit = score % 10
+        
+        # Probability distribution for last digits in basketball scores
+        # Based on analysis of historical NCAA scores
+        digit_probs = {
+            0: 0.15,  # Scores ending in 0 are common
+            1: 0.08,
+            2: 0.10,
+            3: 0.09,
+            4: 0.10,
+            5: 0.12,  # Scores ending in 5 are somewhat common
+            6: 0.09,
+            7: 0.10,
+            8: 0.09,
+            9: 0.08
+        }
+        
+        # Determine if we should change the last digit
+        if random.random() > digit_probs[last_digit]:
+            # Choose a new last digit based on probabilities
+            new_last_digit = random.choices(
+                list(digit_probs.keys()),
+                weights=list(digit_probs.values())
+            )[0]
             
-        # Step 2: Apply a slight regression toward the mean for all scores
-        # This ensures scores cluster around typical basketball scores
-        regression_strength = 0.2  # 20% regression toward the mean
-        adjusted_score = adjusted_score * (1 - regression_strength) + self.score_mean * regression_strength
+            # Apply the new last digit
+            score = score - last_digit + new_last_digit
         
-        # Step 3: Add natural score discretization
-        # Basketball scores tend to come in specific patterns (multiples of 2 and 3)
-        # This adds a subtle bias toward realistic "looking" basketball scores
-        if np.random.random() < 0.7:  # 70% of scores will have this adjustment
-            remainder = adjusted_score % 1
-            if remainder < 0.3:
-                adjusted_score = np.floor(adjusted_score)
-            elif remainder > 0.7:
-                adjusted_score = np.ceil(adjusted_score)
-            else:
-                # Slightly favor even numbers (representing more 2-pointers)
-                if np.random.random() < 0.6:  # 60% chance to round to even
-                    adjusted_score = np.round(adjusted_score / 2) * 2
-                else:
-                    adjusted_score = np.round(adjusted_score)
-        else:
-            # Simple rounding for the other 30%
-            adjusted_score = np.round(adjusted_score)
-        
-        # Step 4: Ensure no negative or unrealistically low/high scores
-        adjusted_score = max(int(adjusted_score), self.min_realistic_score)
-        adjusted_score = min(int(adjusted_score), self.max_realistic_score)
-        
-        return int(adjusted_score)
+        return score
     
     def run_simulation(self, num_simulations=50000):
         """
@@ -821,6 +789,18 @@ class NcaaGameSimulatorV3:
         # Generate histogram
         histogram_path = self._generate_score_histogram(team1, team2, team1_scores, team2_scores)
         
+        # Determine predicted winner and loser for display
+        if team1_avg > team2_avg:
+            predicted_winner = team1
+            predicted_winner_score = round(team1_avg)
+            predicted_loser = team2
+            predicted_loser_score = round(team2_avg)
+        else:
+            predicted_winner = team2
+            predicted_winner_score = round(team2_avg)
+            predicted_loser = team1
+            predicted_loser_score = round(team1_avg)
+        
         # Print results
         print("\n=== Simulation Results ===")
         print(f"Win Probability: {team1} {team1_win_pct:.1f}%, {team2} {team2_win_pct:.1f}%")
@@ -831,7 +811,7 @@ class NcaaGameSimulatorV3:
         print(f"Most Common Score: {team1} {most_common_score[0]} - {team2} {most_common_score[1]}")
         
         # Predicted final score (rounded to integers)
-        print(f"Predicted Final Score: {team1} {round(team1_avg)} - {team2} {round(team2_avg)}")
+        print(f"Predicted Final Score: {predicted_winner} {predicted_winner_score} - {predicted_loser} {predicted_loser_score}")
         
         if histogram_path:
             print(f"Score distribution histogram saved to {histogram_path}")
