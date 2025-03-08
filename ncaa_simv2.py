@@ -77,21 +77,33 @@ class NcaaGameSimulatorV2:
                 self.team_stats = pd.read_csv("kenpom_stats.csv")
                 print("Loading stats from kenpom_stats.csv in main directory")
             # Then try the stats directory
-            elif os.path.exists(f"{self.stats_dir}/kenpom_stats.csv"):
-                self.team_stats = pd.read_csv(f"{self.stats_dir}/kenpom_stats.csv")
+            elif os.path.exists(os.path.join(self.stats_dir, "kenpom_stats.csv")):
+                self.team_stats = pd.read_csv(os.path.join(self.stats_dir, "kenpom_stats.csv"))
                 print(f"Loading stats from {self.stats_dir}/kenpom_stats.csv")
             else:
-                raise FileNotFoundError("No stats file found")
+                # If no file is found, use sample data instead of raising an error
+                print("No stats file found, using sample data.")
+                self._create_sample_data()
+                return
             
-            # Convert team names to lowercase for case-insensitive matching
-            self.team_stats['team_name_lower'] = self.team_stats['team_name'].str.lower()
-            self.team_stats.set_index('team_name', inplace=True)
+            # Process the loaded data
+            # If 'team_name' is in the DataFrame, set it as the index
+            if 'team_name' in self.team_stats.columns:
+                # Convert team names to lowercase for case-insensitive matching
+                self.team_stats['team_name_lower'] = self.team_stats['team_name'].str.lower()
+                self.team_stats.set_index('team_name', inplace=True)
+            else:
+                # If there's no 'team_name' column, assume the first column is the team name
+                first_col = self.team_stats.columns[0]
+                self.team_stats.rename(columns={first_col: 'team_name'}, inplace=True)
+                self.team_stats['team_name_lower'] = self.team_stats['team_name'].str.lower()
+                self.team_stats.set_index('team_name', inplace=True)
             
             print(f"Successfully loaded stats for {len(self.team_stats)} teams")
-        except FileNotFoundError:
-            print(f"Warning: Could not find stats file in main directory or at '{self.stats_dir}/kenpom_stats.csv'")
-            print("Using sample data for demonstration. Please add actual stats files.")
-            # Create sample data if file not found
+        except Exception as e:
+            print(f"Error loading stats file: {e}")
+            print("Using sample data for demonstration.")
+            # Create sample data if file not found or there's an error
             self._create_sample_data()
     
     def _create_sample_data(self):

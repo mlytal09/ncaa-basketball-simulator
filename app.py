@@ -20,10 +20,11 @@ st.set_page_config(
 )
 
 # Function to get a downloadable link for the histogram
-def get_image_download_link(img_path, filename, text):
-    with open(img_path, "rb") as file:
-        img_bytes = file.read()
-    b64 = base64.b64encode(img_bytes).decode()
+def get_image_download_link(fig, filename, text):
+    buf = BytesIO()
+    fig.savefig(buf, format='png')
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
     href = f'<a href="data:image/png;base64,{b64}" download="{filename}">Download {text}</a>'
     return href
 
@@ -207,14 +208,8 @@ def main():
         plt.tight_layout()
         st.pyplot(fig)
         
-        # Save histogram for download
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_path = f"simulation_results/{team1}_vs_{team2}_{timestamp}.png"
-        os.makedirs("simulation_results", exist_ok=True)
-        plt.savefig(save_path)
-        
-        # Provide download link
-        st.markdown(get_image_download_link(save_path, 
+        # Provide download link using in-memory buffer instead of file
+        st.markdown(get_image_download_link(fig, 
                                           f"{team1}_vs_{team2}.png", 
                                           "Histogram"), 
                   unsafe_allow_html=True)
