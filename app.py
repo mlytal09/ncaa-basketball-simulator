@@ -9,8 +9,9 @@ import time
 import base64
 from io import BytesIO
 
-# Import the simulator class from the new version
+# Import simulator classes
 from ncaa_simv2 import NcaaGameSimulatorV2
+from ncaa_simv3 import NcaaGameSimulatorV3
 
 # Set page configuration
 st.set_page_config(
@@ -38,6 +39,15 @@ def main():
     
     # Create sidebar for simulation settings
     st.sidebar.header("Simulation Settings")
+    
+    # Add option to choose simulator version
+    simulator_version = st.sidebar.radio(
+        "Simulator Version",
+        ["Standard (V2)", "Advanced (V3)"],
+        index=1,  # Default to V3
+        help="Standard: Basic simulator with fundamental team metrics. Advanced: Enhanced model with rivalry detection, team form tracking, and improved outcome predictions."
+    )
+    
     num_simulations = st.sidebar.slider(
         "Number of Simulations", 
         min_value=1000, 
@@ -47,8 +57,13 @@ def main():
         help="More simulations = more accurate results but slower"
     )
     
-    # Initialize simulator
-    simulator = NcaaGameSimulatorV2()
+    # Initialize simulator based on selection
+    if simulator_version == "Standard (V2)":
+        simulator = NcaaGameSimulatorV2()
+        st.sidebar.info("Using Standard simulator (V2)")
+    else:
+        simulator = NcaaGameSimulatorV3()
+        st.sidebar.info("Using Advanced simulator (V3) with improved accuracy")
     
     # Create columns for the main UI
     col1, col2 = st.columns(2)
@@ -98,6 +113,11 @@ def main():
         st.write("")
         st.write("")
         
+        # Check for rivalry game if using V3
+        if simulator_version == "Advanced (V3)" and hasattr(simulator, 'is_rivalry_game'):
+            if simulator.is_rivalry_game(team1, team2):
+                st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
+        
         # Create a button to run simulation
         run_button = st.button("Run Simulation", type="primary")
     
@@ -114,11 +134,13 @@ def main():
             ties = 0
             team1_scores = []
             team2_scores = []
+            team1_margins = []  # Track margins for confidence calculation
             
             for _ in range(num_simulations):
                 score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
                 team1_scores.append(score1)
                 team2_scores.append(score2)
+                team1_margins.append(score1 - score2)
                 
                 if score1 > score2:
                     team1_wins += 1
@@ -133,6 +155,10 @@ def main():
             team1_std = np.std(team1_scores)
             team2_std = np.std(team2_scores)
             margin = team1_avg - team2_avg
+            margin_std = np.std(team1_margins)
+            
+            # Calculate confidence interval for the margin
+            confidence_interval = stats.norm.interval(0.95, loc=margin, scale=margin_std/np.sqrt(num_simulations))
             
             # Find most common score
             from collections import Counter
@@ -171,6 +197,12 @@ def main():
             st.write(f"{team1}: {team1_wins/num_simulations*100:.1f}%")
             st.write(f"{team2}: {team2_wins/num_simulations*100:.1f}%")
             st.write(f"Chance of Overtime: {ties/num_simulations*100:.1f}%")
+            
+            # Confidence rating (V3 feature)
+            if simulator_version == "Advanced (V3)":
+                confidence_rating = min(5, max(1, int(abs(team1_wins - team2_wins) / (num_simulations * 0.1))))
+                confidence_stars = "★" * confidence_rating + "☆" * (5 - confidence_rating)
+                st.write(f"Prediction Confidence: {confidence_stars}")
         
         with results_col2:
             st.subheader("Score Prediction")
@@ -179,6 +211,10 @@ def main():
             st.write(f"{team1}: {team1_avg:.1f} ± {team1_std:.1f}")
             st.write(f"{team2}: {team2_avg:.1f} ± {team2_std:.1f}")
             st.write(f"Margin: {margin:.1f} points")
+            
+            # Confidence interval (V3 feature)
+            if simulator_version == "Advanced (V3)":
+                st.write(f"95% confidence interval: {confidence_interval[0]:.1f} to {confidence_interval[1]:.1f} points")
             
             # Most common and predicted scores
             st.write(f"**Most Common Score:**")
