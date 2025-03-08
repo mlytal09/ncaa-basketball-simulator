@@ -33,8 +33,10 @@ def main():
     # Add a title and description
     st.title("NCAA Basketball Game Simulator")
     st.markdown("""
-    This app simulates NCAA basketball games based on team statistics from KenPom.
+    This app simulates NCAA basketball games based on team statistics.
     Select teams and simulation settings below to see predicted outcomes.
+    
+    Data is loaded from team_stats.csv which includes team statistics and conference information.
     """)
     
     # Create sidebar for simulation settings

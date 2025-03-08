@@ -106,17 +106,32 @@ class NcaaGameSimulatorV3:
         """Load team statistics from CSV files - now required in V3"""
         try:
             # First try to load from the main directory
-            if os.path.exists("kenpom_stats.csv"):
-                self.team_stats = pd.read_csv("kenpom_stats.csv")
-                print("Loading stats from kenpom_stats.csv in main directory")
+            if os.path.exists("team_stats.csv"):
+                self.team_stats = pd.read_csv("team_stats.csv")
+                print("Loading stats from team_stats.csv in main directory")
             # Then try the stats directory
+            elif os.path.exists(os.path.join(self.stats_dir, "team_stats.csv")):
+                self.team_stats = pd.read_csv(os.path.join(self.stats_dir, "team_stats.csv"))
+                print(f"Loading stats from {self.stats_dir}/team_stats.csv")
+            # Fall back to old filename for backward compatibility
+            elif os.path.exists("kenpom_stats.csv"):
+                self.team_stats = pd.read_csv("kenpom_stats.csv")
+                print("Loading stats from kenpom_stats.csv in main directory (legacy filename)")
             elif os.path.exists(os.path.join(self.stats_dir, "kenpom_stats.csv")):
                 self.team_stats = pd.read_csv(os.path.join(self.stats_dir, "kenpom_stats.csv"))
-                print(f"Loading stats from {self.stats_dir}/kenpom_stats.csv")
+                print(f"Loading stats from {self.stats_dir}/kenpom_stats.csv (legacy filename)")
             else:
-                raise FileNotFoundError("No KenPom stats file found. Please ensure kenpom_stats.csv exists.")
+                raise FileNotFoundError("No team stats file found. Please ensure team_stats.csv exists.")
             
             # Process the loaded data
+            # Check if we have a 'Conference' column, if not, check if column B (index 1) contains conference info
+            if 'Conference' not in self.team_stats.columns and self.team_stats.shape[1] > 1:
+                # Get the name of the second column (index 1)
+                second_col = self.team_stats.columns[1]
+                # Rename it to 'Conference'
+                self.team_stats.rename(columns={second_col: 'Conference'}, inplace=True)
+                print(f"Renamed column '{second_col}' to 'Conference'")
+            
             if 'team_name' in self.team_stats.columns:
                 # Convert team names to lowercase for case-insensitive matching
                 self.team_stats['team_name_lower'] = self.team_stats['team_name'].str.lower()
@@ -131,6 +146,7 @@ class NcaaGameSimulatorV3:
             # Add conference tier information if available
             if 'Conference' in self.team_stats.columns:
                 self.team_stats['conf_tier'] = self.team_stats['Conference'].apply(self.get_conference_tier)
+                print(f"Found conference information for {self.team_stats['Conference'].nunique()} different conferences")
             
             # Normalize stats for better comparison
             # This helps ensure all stats contribute appropriately
@@ -139,7 +155,7 @@ class NcaaGameSimulatorV3:
             print(f"Successfully loaded stats for {len(self.team_stats)} teams")
         except Exception as e:
             print(f"Error loading stats file: {e}")
-            raise RuntimeError("Cannot proceed without valid KenPom statistics file")
+            raise RuntimeError("Cannot proceed without valid team statistics file")
     
     def normalize_team_stats(self):
         """
