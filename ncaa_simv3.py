@@ -548,22 +548,23 @@ class NcaaGameSimulatorV3:
                 return stats[stat_name]
             return default_value
         
-        # Use adjusted defaults to create more modern, higher-scoring games
-        # Modern NCAA average offensive efficiency is ~107-110
-        team1_off = safe_get_stat(team1_stats, "AdjO", 107.0)
-        team1_def = safe_get_stat(team1_stats, "AdjD", 97.0)
-        team2_off = safe_get_stat(team2_stats, "AdjO", 107.0)
-        team2_def = safe_get_stat(team2_stats, "AdjD", 97.0)
+        # Use balanced defaults to create realistic NCAA scoring averages
+        # NCAA Division I averages for recent seasons
+        team1_off = safe_get_stat(team1_stats, "AdjO", 104.0)  # Adjusted down from 107
+        team1_def = safe_get_stat(team1_stats, "AdjD", 98.0)   # Adjusted up from 97
+        team2_off = safe_get_stat(team2_stats, "AdjO", 104.0)  # Adjusted down from 107
+        team2_def = safe_get_stat(team2_stats, "AdjD", 98.0)   # Adjusted up from 97
         
-        # Get tempo with appropriate defaults (average NCAA tempo is ~68-70)
-        team1_tempo = safe_get_stat(team1_stats, "Tempo", 68.5)
-        team2_tempo = safe_get_stat(team2_stats, "Tempo", 68.5)
+        # Get tempo with appropriate defaults 
+        # NCAA average tempo is ~68-70 possessions per game
+        team1_tempo = safe_get_stat(team1_stats, "Tempo", 68.0)
+        team2_tempo = safe_get_stat(team2_stats, "Tempo", 68.0)
         
         # Small chance of an unusually paced game (fast or slow)
         pace_variation = random.random()
         if pace_variation > 0.9:  # 10% chance of unusual pace
             # Very fast or very slow game
-            tempo_modifier = 1.15 if random.random() > 0.5 else 0.85
+            tempo_modifier = 1.12 if random.random() > 0.5 else 0.88  # Slightly reduced modifiers
             team1_tempo *= tempo_modifier
             team2_tempo *= tempo_modifier
         
@@ -577,28 +578,29 @@ class NcaaGameSimulatorV3:
         possessions = (team1_tempo * team1_tempo_weight) + (team2_tempo * team2_tempo_weight)
         
         # Random game-to-game variation in pace
-        possessions *= (1 + np.random.normal(0, 0.06))  # 6% standard deviation
+        possessions *= (1 + np.random.normal(0, 0.05))  # 5% standard deviation (reduced from 6%)
         
         # Adjust offensive and defensive ratings for matchup and game style
-        # Offensive advantage over defense varies by matchup
-        offense_advantage = 1.05  # Offense has slight advantage in modern college basketball
+        # Slight offensive advantage in modern college basketball
+        offense_advantage = 1.02  # Reduced from 1.05
         
         # Calculate effective offensive and defensive ratings for the matchup
         team1_eff_off = team1_off * offense_advantage
         team2_eff_off = team2_off * offense_advantage
         
         # Calculate expected points per possession with proper weighting
-        team1_ppp = (team1_eff_off / team2_def) * (105 / 100)
-        team2_ppp = (team2_eff_off / team1_def) * (105 / 100)
+        # Removed the additional multiplier of (105/100)
+        team1_ppp = team1_eff_off / team2_def
+        team2_ppp = team2_eff_off / team1_def
         
         # Calculate raw scores based on possessions
         team1_raw_score = team1_ppp * possessions
         team2_raw_score = team2_ppp * possessions
         
         # Apply random variation - more in key games
-        std_dev = 6.0  # Standard deviation (points)
+        std_dev = 5.5  # Standard deviation (points) - reduced from 6.0
         if is_rivalry:
-            std_dev = 8.0  # More variation in rivalry games
+            std_dev = 7.0  # More variation in rivalry games - reduced from 8.0
         
         # Random team performance factors
         team1_score = np.random.normal(team1_raw_score, std_dev)
@@ -642,19 +644,19 @@ class NcaaGameSimulatorV3:
         """
         # Instead of a hard minimum, use a "soft minimum" approach
         # This gradually increases probability of higher scores when raw_score is low
-        if raw_score < 65:
+        if raw_score < 60:
             # Apply a logarithmic transformation to low scores
             # This spreads out the scores below our target minimum instead of clustering them
-            boost_factor = 1.0 - (raw_score / 65)  # 0 to 1 scale for how far below minimum
-            boost_amount = boost_factor * 15  # Up to 15 points of boost
+            boost_factor = 1.0 - (raw_score / 60)  # 0 to 1 scale for how far below minimum
+            boost_amount = boost_factor * 12  # Up to 12 points of boost (reduced from 15)
             
             # Add random boost based on how far below minimum (higher boost for lower scores)
             raw_score += boost_amount * random.random()
         
         # Apply normal distribution adjustment centered around realistic scores
-        # This makes scores closer to realistic ranges more likely
-        college_mean = 75  # Average NCAA score in recent seasons
-        raw_score = raw_score * 0.85 + college_mean * 0.15  # 15% regression to mean
+        # NCAA average score is around 71-73 in recent seasons
+        college_mean = 72  # More moderate average (reduced from 75)
+        raw_score = raw_score * 0.8 + college_mean * 0.2  # 20% regression to mean (increased from 15%)
         
         # Round to integer, but keep decimal part for last-digit probability
         score_whole = int(raw_score)
