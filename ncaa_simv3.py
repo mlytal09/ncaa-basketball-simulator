@@ -549,38 +549,44 @@ class NcaaGameSimulatorV3:
             return default_value
         
         # Get offensive and defensive ratings with fallbacks
-        team1_off = safe_get_stat(team1_stats, "AdjO", 100.0)
-        team1_def = safe_get_stat(team1_stats, "AdjD", 100.0)
-        team2_off = safe_get_stat(team2_stats, "AdjO", 100.0)
-        team2_def = safe_get_stat(team2_stats, "AdjD", 100.0)
+        team1_off = safe_get_stat(team1_stats, "AdjO", 105.0)  # Higher default
+        team1_def = safe_get_stat(team1_stats, "AdjD", 95.0)   # Lower default
+        team2_off = safe_get_stat(team2_stats, "AdjO", 105.0)  # Higher default
+        team2_def = safe_get_stat(team2_stats, "AdjD", 95.0)   # Lower default
         
-        # Get tempo with fallback
-        team1_tempo = safe_get_stat(team1_stats, "Tempo", 68.0)
-        team2_tempo = safe_get_stat(team2_stats, "Tempo", 68.0)
+        # Get tempo with fallback - use a higher default tempo
+        team1_tempo = safe_get_stat(team1_stats, "Tempo", 70.0)
+        team2_tempo = safe_get_stat(team2_stats, "Tempo", 70.0)
         
         # Calculate expected points
-        avg_tempo = (team1_tempo + team2_tempo) / 2
-        possessions = avg_tempo
+        # Use a weighted average of team tempos, with a minimum baseline
+        avg_tempo = max(70.0, (team1_tempo + team2_tempo) / 2)
+        
+        # Apply a small random variation to tempo
+        possessions = avg_tempo * (1 + np.random.normal(0, 0.05))
         
         # Calculate expected points per possession
+        # Use a more direct approach based on offensive and defensive ratings
         team1_off_ppp = team1_off / 100
         team2_def_ppp = team2_def / 100
         team2_off_ppp = team2_off / 100
         team1_def_ppp = team1_def / 100
         
         # Calculate expected points with adjustment for opponent
-        team1_expected_ppp = (team1_off_ppp + (1 - team2_def_ppp)) / 2
-        team2_expected_ppp = (team2_off_ppp + (1 - team1_def_ppp)) / 2
+        # Weighted more toward offensive efficiency for more realistic scoring
+        team1_expected_ppp = (team1_off_ppp * 0.6) + ((1 - team2_def_ppp) * 0.4)
+        team2_expected_ppp = (team2_off_ppp * 0.6) + ((1 - team1_def_ppp) * 0.4)
         
         # Calculate expected raw scores - ensure realistic base scores
-        team1_raw_score = max(60, team1_expected_ppp * possessions)
-        team2_raw_score = max(60, team2_expected_ppp * possessions)
+        # Scale up the scores to match modern college basketball
+        team1_raw_score = team1_expected_ppp * possessions * 1.1  # 10% boost
+        team2_raw_score = team2_expected_ppp * possessions * 1.1  # 10% boost
         
         # Apply random variation
         # More variation for rivalry games
-        std_dev = 4.5
+        std_dev = 5.0  # Increased standard deviation
         if is_rivalry:
-            std_dev = 6.0
+            std_dev = 7.0  # Even more variation for rivalries
         
         team1_score = np.random.normal(team1_raw_score, std_dev)
         team2_score = np.random.normal(team2_raw_score, std_dev)
@@ -621,8 +627,8 @@ class NcaaGameSimulatorV3:
         """
         Convert a raw score to a realistic basketball score
         """
-        # Ensure minimum score is at least 50 points (very low scoring games are rare)
-        raw_score = max(50, raw_score)
+        # Ensure minimum score is at least 60 points (very low scoring games are rare)
+        raw_score = max(60, raw_score)
         
         # Round to nearest integer
         score = round(raw_score)
