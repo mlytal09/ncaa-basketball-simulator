@@ -9,6 +9,7 @@ import difflib
 import requests
 from collections import Counter
 from sklearn.preprocessing import StandardScaler
+import random
 
 class NcaaGameSimulatorV3:
     def __init__(self, stats_dir="stats"):
@@ -103,122 +104,120 @@ class NcaaGameSimulatorV3:
         self.load_team_stats()
         
     def load_team_stats(self):
-        """Load team statistics from CSV files - now required in V3"""
+        """
+        Load team statistics from CSV file
+        """
+        # Try to load from team_stats.csv first, fall back to kenpom_stats.csv
+        stats_file = os.path.join(self.stats_dir, "team_stats.csv")
+        if not os.path.exists(stats_file):
+            stats_file = os.path.join(self.stats_dir, "kenpom_stats.csv")
+            if not os.path.exists(stats_file):
+                raise FileNotFoundError(f"Could not find team stats file in {self.stats_dir}")
+        
+        print(f"Loading stats from {stats_file}")
+        
+        # Load the CSV file
         try:
-            # First try to load from the main directory
-            if os.path.exists("team_stats.csv"):
-                self.team_stats = pd.read_csv("team_stats.csv")
-                print("Loading stats from team_stats.csv in main directory")
-            # Then try the stats directory
-            elif os.path.exists(os.path.join(self.stats_dir, "team_stats.csv")):
-                self.team_stats = pd.read_csv(os.path.join(self.stats_dir, "team_stats.csv"))
-                print(f"Loading stats from {self.stats_dir}/team_stats.csv")
-            # Fall back to old filename for backward compatibility
-            elif os.path.exists("kenpom_stats.csv"):
-                self.team_stats = pd.read_csv("kenpom_stats.csv")
-                print("Loading stats from kenpom_stats.csv in main directory (legacy filename)")
-            elif os.path.exists(os.path.join(self.stats_dir, "kenpom_stats.csv")):
-                self.team_stats = pd.read_csv(os.path.join(self.stats_dir, "kenpom_stats.csv"))
-                print(f"Loading stats from {self.stats_dir}/kenpom_stats.csv (legacy filename)")
-            else:
-                raise FileNotFoundError("No team stats file found. Please ensure team_stats.csv exists.")
-            
-            # Process the loaded data
-            # Check if we have a 'Conference' column, if not, check if column B (index 1) contains conference info
-            if 'Conference' not in self.team_stats.columns and self.team_stats.shape[1] > 1:
-                # Get the name of the second column (index 1)
-                second_col = self.team_stats.columns[1]
-                # Rename it to 'Conference'
-                self.team_stats.rename(columns={second_col: 'Conference'}, inplace=True)
-                print(f"Renamed column '{second_col}' to 'Conference'")
-            
-            if 'team_name' in self.team_stats.columns:
-                # Convert team names to lowercase for case-insensitive matching
-                self.team_stats['team_name_lower'] = self.team_stats['team_name'].str.lower()
-                self.team_stats.set_index('team_name', inplace=True)
-            else:
-                # If there's no 'team_name' column, assume the first column is the team name
-                first_col = self.team_stats.columns[0]
-                self.team_stats.rename(columns={first_col: 'team_name'}, inplace=True)
-                self.team_stats['team_name_lower'] = self.team_stats['team_name'].str.lower()
-                self.team_stats.set_index('team_name', inplace=True)
-            
-            # Add conference tier information if available
-            if 'Conference' in self.team_stats.columns:
-                self.team_stats['conf_tier'] = self.team_stats['Conference'].apply(self.get_conference_tier)
-                print(f"Found conference information for {self.team_stats['Conference'].nunique()} different conferences")
-            
-            # Normalize stats for better comparison
-            # This helps ensure all stats contribute appropriately
-            self.normalize_team_stats()
-            
-            print(f"Successfully loaded stats for {len(self.team_stats)} teams")
+            df = pd.read_csv(stats_file)
         except Exception as e:
             print(f"Error loading stats file: {e}")
-            raise RuntimeError("Cannot proceed without valid team statistics file")
-    
-    def normalize_team_stats(self):
+            raise
+        
+        # Check if we need to rename the Conference column (handle typo)
+        if 'Conerence' in df.columns and 'Conference' not in df.columns:
+            df = df.rename(columns={'Conerence': 'Conference'})
+            print("Renamed column 'Conerence' to 'Conference'")
+        
+        # Make sure we have a Team column
+        if 'Team' not in df.columns:
+            # Try to find a column that might contain team names
+            potential_team_columns = ['team', 'Team Name', 'TeamName', 'School']
+            for col in potential_team_columns:
+                if col in df.columns:
+                    df = df.rename(columns={col: 'Team'})
+                    print(f"Renamed column '{col}' to 'Team'")
+                    break
+            else:
+                # If we can't find a team column, use the first column
+                df = df.rename(columns={df.columns[0]: 'Team'})
+                print(f"Using first column as 'Team'")
+        
+        # Create a lowercase version of team names for easier matching
+        df['team_name_lower'] = df['Team'].str.lower()
+        
+        # Extract conference information
+        if 'Conference' in df.columns:
+            conferences = df['Conference'].unique()
+            print(f"Found conference information for {len(conferences)} different conferences")
+        
+        # Normalize the statistics
+        self.team_stats = self.normalize_team_stats(df)
+        
+        # Set the team name as index for faster lookups
+        self.team_stats = self.team_stats.set_index('team_name_lower')
+        
+        print(f"Successfully loaded stats for {len(self.team_stats)} teams")
+        return self.team_stats
+
+    def normalize_team_stats(self, df):
         """
-        Normalize team stats using feature scaling to improve comparison.
-        Ensures all important statistics used in the simulation are properly normalized.
+        Normalize team statistics for better comparison
         """
-        # Define the key statistics that should be normalized
-        # These are the stats used in our weighting system and simulation logic
+        # Define key statistics that should be normalized
         key_stats = [
-            # Efficiency Metrics
-            'AdjO', 'AdjD', 'SOS AdjO', 'SOS AdjD',
-            
+            # Efficiency metrics
+            "AdjO", "AdjD", "AdjEM", 
             # Four Factors
-            'eFG%', 'TOV%', 'ORB%', 'FTR',
-            
-            # Defensive Stats
-            'Blk%', 'Stl%', 'Def 2P%', 'Def 3P%', 'Def FT%',
-            
-            # Offensive Tendencies
-            'NST%', 'A%', '3PA%',
-            
-            # Height
-            'Hgt',
-            
-            # Points Distribution
-            '%2P', '%3P', '%FT',
-            
-            # Tempo
-            'Tempo'
+            "eFG%", "TOV%", "ORB%", "FTR",
+            # Defensive stats
+            "Def eFG%", "Def TOV%", "Def ORB%", "Def FTR",
+            # SOS metrics
+            "SOS AdjEM", "SOS OppO", "SOS OppD", "SOS AdjO", "SOS AdjD",
+            # Offensive tendencies
+            "3PA%", "A%", "2P%", "3P%", "FT%",
+            # Defensive stats
+            "Blk%", "Stl%", "Def 2P%", "Def 3P%", "Def FT%",
+            # Height and tempo
+            "Hgt", "Tempo"
         ]
         
-        # Also include any numeric columns that might be in the dataset
-        numeric_cols = self.team_stats.select_dtypes(include=np.number).columns.tolist()
+        # Find numeric columns for normalization
+        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
         
-        # Combine and deduplicate
-        all_stats = list(set(key_stats + numeric_cols))
+        # Remove columns we don't want to normalize
+        exclude_cols = ['team_name_lower', 'Rk', 'W-L']
+        numeric_cols = [col for col in numeric_cols if col not in exclude_cols]
         
-        # Remove columns that shouldn't be normalized
-        skip_cols = ['team_name_lower', 'Rk', 'W-L', 'conf_tier']
-        normalize_cols = [col for col in all_stats if col not in skip_cols]
+        # Combine key stats with numeric columns
+        all_stats_to_normalize = list(set(numeric_cols + [stat for stat in key_stats if stat in df.columns]))
         
-        # Track which stats were normalized
-        normalized_stats = []
+        # Track which key statistics are missing
+        missing_key_stats = [stat for stat in key_stats if stat not in df.columns]
+        if missing_key_stats:
+            print(f"Warning: Missing key statistics: {', '.join(missing_key_stats)}")
+        
+        # Create a copy of the dataframe
+        normalized_df = df.copy()
         
         # Normalize each column
-        for col in normalize_cols:
-            if col in self.team_stats.columns:
-                # Calculate mean and std for normalization
-                mean = self.team_stats[col].mean()
-                std = self.team_stats[col].std()
-                if std > 0:  # Avoid division by zero
-                    # Create normalized column (z-score)
-                    self.team_stats[f"{col}_norm"] = (self.team_stats[col] - mean) / std
-                    normalized_stats.append(col)
+        scaler = StandardScaler()
+        if all_stats_to_normalize:
+            # Fill NaN values with mean for normalization
+            for col in all_stats_to_normalize:
+                if col in normalized_df.columns:
+                    normalized_df[col] = normalized_df[col].fillna(normalized_df[col].mean())
+            
+            # Perform normalization
+            normalized_data = scaler.fit_transform(normalized_df[all_stats_to_normalize])
+            
+            # Add normalized columns back to dataframe
+            for i, col in enumerate(all_stats_to_normalize):
+                normalized_df[f"{col}_norm"] = normalized_data[:, i]
+            
+            print(f"Normalized {len(all_stats_to_normalize)} statistics: {', '.join(all_stats_to_normalize[:5])}...")
         
-        print(f"Normalized {len(normalized_stats)} statistics: {', '.join(normalized_stats[:5])}{'...' if len(normalized_stats) > 5 else ''}")
-        
-        # Check if any key stats are missing
-        missing_stats = [stat for stat in key_stats if stat not in self.team_stats.columns]
-        if missing_stats:
-            print(f"Warning: Some key statistics are missing from the dataset: {', '.join(missing_stats[:5])}{'...' if len(missing_stats) > 5 else ''}")
-            print("The simulator will still work but may be less accurate.")
-    
+        return normalized_df
+
     def get_conference_tier(self, conference):
         """Determine the tier of a conference for home court advantage"""
         if conference in self.conference_tiers['elite']:
@@ -262,48 +261,58 @@ class NcaaGameSimulatorV3:
         return base_advantage
     
     def check_team_exists(self, team_name):
-        """Check if a team exists in the stats database with improved name matching"""
-        # First try direct match
-        if team_name in self.team_stats.index:
-            return team_name
+        """
+        Check if a team exists in the dataset
+        """
+        if not team_name:
+            return False
         
-        # Try case-insensitive match
         team_lower = team_name.lower()
-        matching_teams = self.team_stats[self.team_stats['team_name_lower'] == team_lower]
         
-        if not matching_teams.empty:
-            return matching_teams.index[0]
+        # Direct match
+        if team_lower in self.team_stats.index:
+            return True
         
-        # If no match, find similar team names
-        similar_teams = self.find_similar_teams(team_name)
-        if similar_teams:
-            suggestion = similar_teams[0]
-            print(f"Team '{team_name}' not found. Did you mean: {', '.join(similar_teams)}?")
-        else:
-            print(f"Team '{team_name}' not found in the database.")
+        # Partial match
+        for idx in self.team_stats.index:
+            if team_lower in idx:
+                return True
         
-        return None
-    
+        return False
+
     def find_similar_teams(self, team_name, threshold=0.6):
-        """Find similar team names based on string similarity"""
+        """
+        Find teams with similar names using fuzzy matching
+        """
+        if not team_name:
+            return []
+        
         team_lower = team_name.lower()
-        all_teams = self.team_stats.index.tolist()
-        
-        # Use difflib to find similar team names
-        matches = difflib.get_close_matches(team_lower, 
-                                          [t.lower() for t in all_teams], 
-                                          n=3, 
-                                          cutoff=threshold)
-        
-        # Map back to actual team names (with proper capitalization)
         similar_teams = []
-        for match in matches:
-            for team in all_teams:
-                if team.lower() == match:
-                    similar_teams.append(team)
-                    break
         
-        return similar_teams
+        # Get all team names
+        all_teams = [idx for idx in self.team_stats.index]
+        
+        # Check for partial matches first (more intuitive)
+        for idx in all_teams:
+            if team_lower in idx or idx in team_lower:
+                # Get the actual team name with proper capitalization
+                team_proper = self.team_stats.loc[idx]["Team"] if "Team" in self.team_stats.loc[idx] else idx
+                similar_teams.append(team_proper)
+        
+        # If no partial matches, try fuzzy matching
+        if not similar_teams:
+            from difflib import SequenceMatcher
+            
+            for idx in all_teams:
+                similarity = SequenceMatcher(None, team_lower, idx).ratio()
+                if similarity >= threshold:
+                    # Get the actual team name with proper capitalization
+                    team_proper = self.team_stats.loc[idx]["Team"] if "Team" in self.team_stats.loc[idx] else idx
+                    similar_teams.append(team_proper)
+        
+        # Return top 5 most similar teams
+        return similar_teams[:5]
     
     def get_team_form(self, team_name):
         """
@@ -350,48 +359,96 @@ class NcaaGameSimulatorV3:
     
     def is_rivalry_game(self, team1, team2):
         """
-        Check if two teams have a historical rivalry.
-        This would ideally use historical data.
-        
-        Args:
-            team1, team2: Names of the teams
-            
-        Returns:
-            bool: Whether the teams are rivals
+        Check if two teams are rivals
         """
-        # List of known rivalries (could be expanded or loaded from data)
+        # Convert to lowercase for case-insensitive matching
+        team1_lower = team1.lower()
+        team2_lower = team2.lower()
+        
+        # Get team conferences if available
+        team1_conf = None
+        team2_conf = None
+        
+        try:
+            if "Conference" in self.team_stats.loc[team1_lower]:
+                team1_conf = self.team_stats.loc[team1_lower]["Conference"]
+            if "Conference" in self.team_stats.loc[team2_lower]:
+                team2_conf = self.team_stats.loc[team2_lower]["Conference"]
+        except (KeyError, TypeError):
+            # If we can't find the teams or conferences, just continue
+            pass
+        
+        # Define known rivalries
         rivalries = [
-            ('Duke', 'North Carolina'),
-            ('Kentucky', 'Louisville'),
-            ('Kansas', 'Kansas State'),
-            ('Indiana', 'Purdue'),
-            ('Michigan', 'Michigan State'),
-            ('UCLA', 'USC'),
-            ('Alabama', 'Auburn'),
-            ('Villanova', 'Georgetown'),
-            ('Xavier', 'Cincinnati')
-            # Add more rivalries as needed
+            # ACC rivalries
+            ("duke", "north carolina"),
+            ("virginia", "virginia tech"),
+            ("louisville", "kentucky"),
+            # Big Ten rivalries
+            ("michigan", "michigan state"),
+            ("indiana", "purdue"),
+            ("ohio state", "michigan"),
+            # Big 12 rivalries
+            ("kansas", "kansas state"),
+            ("texas", "oklahoma"),
+            ("iowa state", "iowa"),
+            # SEC rivalries
+            ("alabama", "auburn"),
+            ("florida", "florida state"),
+            ("kentucky", "tennessee"),
+            # Pac-12 rivalries
+            ("ucla", "usc"),
+            ("arizona", "arizona state"),
+            ("oregon", "oregon state"),
+            # Big East rivalries
+            ("villanova", "georgetown"),
+            ("st. john's", "georgetown"),
+            ("marquette", "wisconsin"),
+            # Other major rivalries
+            ("cincinnati", "xavier"),
+            ("memphis", "tennessee"),
+            ("byu", "utah"),
+            ("gonzaga", "saint mary's"),
+            ("creighton", "nebraska"),
+            ("dayton", "xavier")
         ]
         
-        # Check if teams are in the rivalry list (in either order)
+        # Check if teams are in the same conference (potential rivalry)
+        same_conference = team1_conf and team2_conf and team1_conf == team2_conf
+        
+        # Check if teams are in a known rivalry
         for rival1, rival2 in rivalries:
-            if (team1 == rival1 and team2 == rival2) or (team1 == rival2 and team2 == rival1):
+            if (rival1 in team1_lower and rival2 in team2_lower) or (rival1 in team2_lower and rival2 in team1_lower):
                 return True
         
-        return False
+        # Consider in-state matchups as potential rivalries
+        # Extract state names from team names if possible
+        states = [
+            "alabama", "alaska", "arizona", "arkansas", "california", "colorado", 
+            "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho", 
+            "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", 
+            "maine", "maryland", "massachusetts", "michigan", "minnesota", 
+            "mississippi", "missouri", "montana", "nebraska", "nevada", 
+            "new hampshire", "new jersey", "new mexico", "new york", "north carolina", 
+            "north dakota", "ohio", "oklahoma", "oregon", "pennsylvania", 
+            "rhode island", "south carolina", "south dakota", "tennessee", "texas", 
+            "utah", "vermont", "virginia", "washington", "west virginia", 
+            "wisconsin", "wyoming"
+        ]
+        
+        # Check if both teams contain the same state name
+        for state in states:
+            if state in team1_lower and state in team2_lower:
+                return True
+        
+        # Return True if teams are in the same conference (weaker signal)
+        return same_conference
     
     def calculate_team_strength(self, team_stats):
         """
-        Calculate overall team strength based on weighted stats.
-        Enhanced with better normalization and handling of missing values.
-        
-        Args:
-            team_stats: Statistics for a single team
-            
-        Returns:
-            float: Team strength score
+        Calculate team strength based on weighted statistics
         """
-        strength = 0
+        strength = 0.0
         used_stats = []
         missing_stats = []
         
@@ -399,14 +456,14 @@ class NcaaGameSimulatorV3:
         for stat, weight in self.weights.items():
             # Try to use normalized version first
             norm_stat = f"{stat}_norm"
-            if norm_stat in team_stats and not pd.isna(team_stats[norm_stat]):
+            if norm_stat in team_stats.index and not pd.isna(team_stats[norm_stat]):
                 # For normalized stats, higher is always better
                 norm_value = (team_stats[norm_stat] + 2) / 4  # Scale from roughly -2..2 to 0..1
                 # Cap between 0 and 1
                 norm_value = max(0, min(1, norm_value))
                 strength += weight * norm_value
                 used_stats.append(f"{stat} (normalized)")
-            elif stat in team_stats and not pd.isna(team_stats[stat]):
+            elif stat in team_stats.index and not pd.isna(team_stats[stat]):
                 # Fall back to non-normalized stats with manual normalization
                 if stat in ["TOV%", "AdjD", "Def 2P%", "Def 3P%", "Def FT%"]:
                     # For these stats, lower is better
@@ -436,154 +493,146 @@ class NcaaGameSimulatorV3:
                         # General normalization
                         norm_value = team_stats[stat] / 100
                 
-                # Ensure values are between 0 and 1
+                # Cap between 0 and 1
                 norm_value = max(0, min(1, norm_value))
                 strength += weight * norm_value
                 used_stats.append(stat)
             else:
-                # Stat is missing - track it but don't penalize
                 missing_stats.append(stat)
         
-        # If this is the first calculation, print some debug info
-        if getattr(self, '_first_strength_calc', True):
+        # Print debug info for the first calculation
+        if not hasattr(self, '_printed_stats_debug'):
             print(f"Using {len(used_stats)} statistics for strength calculation")
             if missing_stats:
-                print(f"Warning: {len(missing_stats)} statistics are missing: {', '.join(missing_stats[:5])}{'...' if len(missing_stats) > 5 else ''}")
-            self._first_strength_calc = False
+                print(f"Warning: Missing statistics: {', '.join(missing_stats)}")
+            self._printed_stats_debug = True
         
         return strength
     
     def simulate_game(self, team1, team2, neutral_court=False):
         """
-        Simulate a single game between two teams with improved realism.
-        Enhanced with team form considerations and rivalry adjustments.
-        
-        Args:
-            team1 (str): Name of the first team (home team if not neutral)
-            team2 (str): Name of the second team (away team if not neutral)
-            neutral_court (bool): Whether the game is on a neutral court
-        
-        Returns:
-            tuple: (team1_score, team2_score)
+        Simulate a single game between two teams
         """
-        # Get team statistics
-        team1_stats = self.team_stats.loc[team1]
-        team2_stats = self.team_stats.loc[team2]
+        # Get team stats
+        try:
+            team1_stats = self.team_stats.loc[team1.lower()]
+            team2_stats = self.team_stats.loc[team2.lower()]
+        except KeyError:
+            # Try to find the team by searching for partial matches
+            team1_found = False
+            team2_found = False
+            
+            for team_name in self.team_stats.index:
+                if team1.lower() in team_name:
+                    team1 = team_name
+                    team1_found = True
+                if team2.lower() in team_name:
+                    team2 = team_name
+                    team2_found = True
+            
+            if not team1_found or not team2_found:
+                raise ValueError(f"Could not find teams: {team1 if not team1_found else ''} {team2 if not team2_found else ''}")
+            
+            team1_stats = self.team_stats.loc[team1]
+            team2_stats = self.team_stats.loc[team2]
         
-        # Get recent form data
-        team1_form = self.get_team_form(team1)
-        team2_form = self.get_team_form(team2)
+        # Get team names with proper capitalization
+        team1_name = team1_stats["Team"] if "Team" in team1_stats else team1
+        team2_name = team2_stats["Team"] if "Team" in team2_stats else team2
         
-        # Calculate team strengths using the weighted model
+        # Calculate team strengths
         team1_strength = self.calculate_team_strength(team1_stats)
         team2_strength = self.calculate_team_strength(team2_stats)
         
-        # Apply form adjustments
-        team1_form_factor = 1.0 + (team1_form['recent_win_pct'] - 0.5) * 0.1 + team1_form['momentum']
-        team2_form_factor = 1.0 + (team2_form['recent_win_pct'] - 0.5) * 0.1 + team2_form['momentum']
-        
-        team1_strength *= team1_form_factor
-        team2_strength *= team2_form_factor
-        
-        # Check for rivalry game
-        if self.is_rivalry_game(team1, team2):
-            # In rivalry games, teams tend to play closer to their potential
-            # and the weaker team often plays better than expected
-            if team1_strength < team2_strength:
-                team1_strength += self.rivalry_boost
-            else:
-                team2_strength += self.rivalry_boost
-        
-        # Calculate expected possessions based on teams' tempos
-        possessions = (team1_stats["Tempo"] + team2_stats["Tempo"]) / 2 * self.poss_adjustment
-        
-        # Calculate base offensive efficiency for each team (points per 100 possessions)
-        team1_off = team1_stats["AdjO"]
-        team2_off = team2_stats["AdjO"]
-        team1_def = team1_stats["AdjD"]
-        team2_def = team2_stats["AdjD"]
-        
-        # Adjust offensive efficiency based on opponent's defense
-        team1_adj_off = team1_off * (100 / team2_def)
-        team2_adj_off = team2_off * (100 / team1_def)
-        
-        # Apply the strength differential to the efficiency with regression to the mean
-        strength_diff = team1_strength - team2_strength
-        
-        # Regression to the mean - stronger for larger differentials
-        # This ensures more realistic predictions for mismatched teams
-        regression_factor = min(0.5, abs(strength_diff) * 3)  # Up to 50% regression
-        
-        # Apply regression to strength differential
-        reg_strength_diff = strength_diff * (1 - regression_factor)
-        
-        # Cap the strength differential to prevent extreme advantages
-        reg_strength_diff = max(min(reg_strength_diff, 0.5), -0.5)
-        
-        # Apply adjusted differential to efficiencies
-        team1_adj_off *= (1 + 0.004 * reg_strength_diff)  # Reduced impact
-        team2_adj_off *= (1 - 0.004 * reg_strength_diff)  # Reduced impact
-        
-        # Add home court advantage if not neutral
+        # Apply home court advantage if not neutral
         if not neutral_court:
-            # Calculate home court advantage based on team factors
+            if team1 == team2:
+                raise ValueError("Home and away teams cannot be the same")
+            
+            # Apply home court advantage to team1 (home team)
             home_advantage = self.calculate_home_advantage(team1_stats)
-            
-            # Convert advantage to efficiency adjustment
-            home_eff_boost = home_advantage / possessions * 100
-            team1_adj_off += home_eff_boost * 0.7
-            team2_adj_off -= home_eff_boost * 0.2
+            team1_strength *= (1 + home_advantage)
         
-        # Standard deviations for more natural distributions
-        poss_stddev = 2.5
-        eff_stddev = 5.0
+        # Determine if it's a rivalry game
+        is_rivalry = self.is_rivalry_game(team1, team2)
+        if is_rivalry:
+            # Rivalry games are more unpredictable - reduce the strength gap
+            avg_strength = (team1_strength + team2_strength) / 2
+            team1_strength = team1_strength * 0.8 + avg_strength * 0.2
+            team2_strength = team2_strength * 0.8 + avg_strength * 0.2
         
-        # Calculate upset chance that scales with strength differential
-        # Even extreme mismatches should have some chance of upset
-        upset_chance = max(
-            self.min_upset_chance,
-            self.base_upset_chance * (1 - abs(reg_strength_diff))
-        )
+        # Calculate win probability
+        total_strength = team1_strength + team2_strength
+        team1_win_prob = team1_strength / total_strength
+        team2_win_prob = team2_strength / total_strength
         
-        # Apply random upset factor
-        if np.random.random() < upset_chance:
-            # Upset factors have more impact in mismatched games
-            upset_magnitude = 0.1 + 0.1 * abs(reg_strength_diff)  # 10-20% swing
-            
-            # Apply to the underdog
-            if team1_adj_off < team2_adj_off:
-                team1_adj_off *= (1 + upset_magnitude)
-            else:
-                team2_adj_off *= (1 + upset_magnitude)
+        # Safely get offensive and defensive stats with fallbacks
+        def safe_get_stat(stats, stat_name, default_value):
+            if stat_name in stats.index and not pd.isna(stats[stat_name]):
+                return stats[stat_name]
+            return default_value
         
-        # Add game-specific performance variability
-        team1_perf = np.random.normal(1.0, 0.04)
-        team2_perf = np.random.normal(1.0, 0.04)
+        # Get offensive and defensive ratings with fallbacks
+        team1_off = safe_get_stat(team1_stats, "AdjO", 100.0)
+        team1_def = safe_get_stat(team1_stats, "AdjD", 100.0)
+        team2_off = safe_get_stat(team2_stats, "AdjO", 100.0)
+        team2_def = safe_get_stat(team2_stats, "AdjD", 100.0)
         
-        team1_adj_off *= team1_perf
-        team2_adj_off *= team2_perf
+        # Get tempo with fallback
+        team1_tempo = safe_get_stat(team1_stats, "Tempo", 68.0)
+        team2_tempo = safe_get_stat(team2_stats, "Tempo", 68.0)
         
-        # Generate actual possessions and offensive efficiency
-        actual_possessions = np.random.normal(possessions, poss_stddev)
-        team1_actual_off = np.random.normal(team1_adj_off, eff_stddev)
-        team2_actual_off = np.random.normal(team2_adj_off, eff_stddev)
+        # Calculate expected points
+        avg_tempo = (team1_tempo + team2_tempo) / 2
+        possessions = avg_tempo
         
-        # Calculate raw scores
-        team1_raw_score = team1_actual_off * actual_possessions / 100
-        team2_raw_score = team2_actual_off * actual_possessions / 100
+        # Calculate expected points per possession
+        team1_off_ppp = team1_off / 100
+        team2_def_ppp = team2_def / 100
+        team2_off_ppp = team2_off / 100
+        team1_def_ppp = team1_def / 100
         
-        # Apply our realistic score distribution model
-        team1_score = self.create_realistic_score(team1_raw_score)
-        team2_score = self.create_realistic_score(team2_raw_score)
+        # Calculate expected points with adjustment for opponent
+        team1_expected_ppp = (team1_off_ppp + (1 - team2_def_ppp)) / 2
+        team2_expected_ppp = (team2_off_ppp + (1 - team1_def_ppp)) / 2
         
-        # Resolve tied games - slightly favor the team with higher pre-game strength
-        if team1_score == team2_score:
-            if np.random.random() < (0.5 + reg_strength_diff * 0.3):
-                team1_score += 1
-            else:
-                team2_score += 1
+        # Calculate expected raw scores
+        team1_raw_score = team1_expected_ppp * possessions
+        team2_raw_score = team2_expected_ppp * possessions
         
-        return team1_score, team2_score
+        # Apply random variation
+        # More variation for rivalry games
+        std_dev = 4.5
+        if is_rivalry:
+            std_dev = 6.0
+        
+        team1_score = np.random.normal(team1_raw_score, std_dev)
+        team2_score = np.random.normal(team2_raw_score, std_dev)
+        
+        # Create realistic basketball scores
+        team1_final = self.create_realistic_score(team1_score)
+        team2_final = self.create_realistic_score(team2_score)
+        
+        # Check for overtime
+        is_overtime = False
+        if abs(team1_final - team2_final) <= 3:
+            # Close game - small chance of overtime
+            if random.random() < 0.15:
+                is_overtime = True
+                # Add overtime points (typically 7-10 points per team in OT)
+                ot_points1 = random.randint(5, 12)
+                ot_points2 = random.randint(5, 12)
+                
+                # Slightly favor the team that was ahead
+                if team1_final > team2_final:
+                    ot_points1 += random.randint(0, 2)
+                elif team2_final > team1_final:
+                    ot_points2 += random.randint(0, 2)
+                
+                team1_final += ot_points1
+                team2_final += ot_points2
+        
+        return team1_final, team2_final, is_overtime
     
     def create_realistic_score(self, raw_score):
         """
@@ -644,136 +693,163 @@ class NcaaGameSimulatorV3:
     
     def run_simulation(self, num_simulations=50000):
         """
-        Run the game simulation interface.
-        
-        Args:
-            num_simulations (int): Number of simulations to run
+        Run a full simulation of a game between two teams
         """
-        print("\n" + "=" * 50)
-        print("NCAA Basketball Game Simulator v3".center(50))
-        print("=" * 50 + "\n")
-        
-        # Get simulation parameters
-        while True:
-            neutral_input = input("Is this game on a neutral court? (yes/no): ").strip().lower()
-            if neutral_input in ["yes", "y", "true", "1", "no", "n", "false", "0"]:
-                neutral_court = neutral_input in ["yes", "y", "true", "1"]
-                break
-            else:
-                print("Please enter 'yes' or 'no'.")
+        # Get user input for teams
+        neutral_court = input("Is this game on a neutral court? (yes/no): ").lower().startswith('y')
         
         if neutral_court:
-            # Get two teams for neutral court game
-            team1 = None
-            while team1 is None:
-                team1_input = input("Enter the Team 1: ").strip()
-                team1 = self.check_team_exists(team1_input)
-                if team1 is None:
-                    print("Please try again with a valid team name.")
-            
-            team2 = None
-            while team2 is None:
-                team2_input = input("Enter the Team 2: ").strip()
-                team2 = self.check_team_exists(team2_input)
-                if team2 is None:
-                    print("Please try again with a valid team name.")
+            team1 = input("Enter the first team: ")
+            team2 = input("Enter the second team: ")
         else:
-            # Get home and away teams
-            home_team = None
-            while home_team is None:
-                home_input = input("Enter the Home team: ").strip()
-                home_team = self.check_team_exists(home_input)
-                if home_team is None:
-                    print("Please try again with a valid team name.")
-            
-            away_team = None
-            while away_team is None:
-                away_input = input("Enter the Away team: ").strip()
-                away_team = self.check_team_exists(away_input)
-                if away_team is None:
-                    print("Please try again with a valid team name.")
-            
-            team1 = home_team
-            team2 = away_team
+            team1 = input("Enter the Home team: ")
+            team2 = input("Enter the Away team: ")
         
-        # Check for rivalry game
-        if self.is_rivalry_game(team1, team2):
-            print(f"\n⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected! ⚡")
+        # Check if teams exist
+        if not self.check_team_exists(team1):
+            similar_teams = self.find_similar_teams(team1)
+            if similar_teams:
+                print(f"Team '{team1}' not found. Did you mean one of these?")
+                for i, team in enumerate(similar_teams, 1):
+                    print(f"{i}. {team}")
+                choice = input("Enter the number of your choice (or press Enter to try again): ")
+                if choice.isdigit() and 1 <= int(choice) <= len(similar_teams):
+                    team1 = similar_teams[int(choice) - 1]
+                else:
+                    return self.run_simulation(num_simulations)
+            else:
+                print(f"Team '{team1}' not found and no similar teams found.")
+                return self.run_simulation(num_simulations)
         
-        print(f"\nSimulating {num_simulations} games between {team1} and {team2}...")
-        print(f"Court: {'Neutral' if neutral_court else f'{team1} home'}")
+        if not self.check_team_exists(team2):
+            similar_teams = self.find_similar_teams(team2)
+            if similar_teams:
+                print(f"Team '{team2}' not found. Did you mean one of these?")
+                for i, team in enumerate(similar_teams, 1):
+                    print(f"{i}. {team}")
+                choice = input("Enter the number of your choice (or press Enter to try again): ")
+                if choice.isdigit() and 1 <= int(choice) <= len(similar_teams):
+                    team2 = similar_teams[int(choice) - 1]
+                else:
+                    return self.run_simulation(num_simulations)
+            else:
+                print(f"Team '{team2}' not found and no similar teams found.")
+                return self.run_simulation(num_simulations)
         
-        # Run simulations
-        start_time = time.time()
+        # Check if it's a rivalry game
+        is_rivalry = self.is_rivalry_game(team1, team2)
+        if is_rivalry:
+            print(f"\n⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected! ⚡\n")
+        
+        # Run the simulation
+        print(f"Simulating {num_simulations} games between {team1} and {team2}...")
+        if not neutral_court:
+            print(f"Court: {team1} home")
+        else:
+            print("Court: Neutral")
+        
+        # Store results
         team1_wins = 0
         team2_wins = 0
-        ties = 0
+        overtime_games = 0
         team1_scores = []
         team2_scores = []
-        team1_margins = []  # Track margins for confidence calculation
         
         for _ in range(num_simulations):
-            score1, score2 = self.simulate_game(team1, team2, neutral_court)
+            score1, score2, is_overtime = self.simulate_game(team1, team2, neutral_court)
             team1_scores.append(score1)
             team2_scores.append(score2)
-            team1_margins.append(score1 - score2)
             
             if score1 > score2:
                 team1_wins += 1
-            elif score2 > score1:
-                team2_wins += 1
             else:
-                ties += 1
+                team2_wins += 1
+            
+            if is_overtime:
+                overtime_games += 1
         
         # Calculate statistics
+        team1_win_pct = team1_wins / num_simulations * 100
+        team2_win_pct = team2_wins / num_simulations * 100
+        overtime_pct = overtime_games / num_simulations * 100
+        
         team1_avg = np.mean(team1_scores)
         team2_avg = np.mean(team2_scores)
         team1_std = np.std(team1_scores)
         team2_std = np.std(team2_scores)
-        margin = team1_avg - team2_avg
-        margin_std = np.std(team1_margins)
         
-        # Calculate confidence interval for the margin
-        confidence_interval = stats.norm.interval(0.95, loc=margin, scale=margin_std/np.sqrt(num_simulations))
+        margin = team1_avg - team2_avg
+        
+        # Calculate 95% confidence interval for margin
+        margin_std = np.std([s1 - s2 for s1, s2 in zip(team1_scores, team2_scores)])
+        margin_error = 1.96 * margin_std / np.sqrt(num_simulations)
+        margin_lower = margin - margin_error
+        margin_upper = margin + margin_error
         
         # Find most common score
-        score_pairs = [(team1_scores[i], team2_scores[i]) for i in range(num_simulations)]
-        most_common_score = Counter(score_pairs).most_common(1)[0][0]
+        score_counts = Counter(zip(team1_scores, team2_scores))
+        most_common_score = score_counts.most_common(1)[0][0]
+        
+        # Calculate prediction confidence (1-5 stars)
+        confidence_score = 0
+        
+        # Factor 1: Sample size
+        if num_simulations >= 10000:
+            confidence_score += 1
+        
+        # Factor 2: Win probability certainty
+        win_certainty = abs(team1_win_pct - 50) / 50  # 0 to 1
+        if win_certainty > 0.4:
+            confidence_score += 1
+        
+        # Factor 3: Standard deviation of scores
+        avg_std = (team1_std + team2_std) / 2
+        if avg_std < 6:
+            confidence_score += 1
+        
+        # Factor 4: Narrow confidence interval
+        if abs(margin_upper - margin_lower) < 0.5:
+            confidence_score += 1
+        
+        # Factor 5: Rivalry adjustment
+        if not is_rivalry:
+            confidence_score += 1
+        
+        # Convert to stars
+        confidence_stars = "★" * confidence_score + "☆" * (5 - confidence_score)
+        
+        # Generate histogram
+        histogram_path = self._generate_score_histogram(team1, team2, team1_scores, team2_scores)
         
         # Print results
-        print("\n" + "=" * 50)
-        print("SIMULATION RESULTS".center(50))
-        print("=" * 50)
-        
-        sim_time = time.time() - start_time
-        print(f"\nSimulations completed: {num_simulations} ({sim_time:.2f} seconds)")
-        print(f"\n{team1} vs {team2}")
-        print(f"Court: {'Neutral' if neutral_court else f'{team1} home'}")
-        
-        # Win probability with confidence rating
-        confidence_rating = min(5, max(1, int(abs(team1_wins - team2_wins) / (num_simulations * 0.1))))
-        confidence_stars = "★" * confidence_rating + "☆" * (5 - confidence_rating)
-        
-        print("\nWin Probability:")
-        print(f"{team1}: {team1_wins/num_simulations*100:.1f}%")
-        print(f"{team2}: {team2_wins/num_simulations*100:.1f}%")
-        print(f"Chance of Overtime: {ties/num_simulations*100:.1f}%")
+        print("\n=== Simulation Results ===")
+        print(f"Win Probability: {team1} {team1_win_pct:.1f}%, {team2} {team2_win_pct:.1f}%")
+        print(f"Chance of Overtime: {overtime_pct:.1f}%")
         print(f"Prediction Confidence: {confidence_stars}")
+        print(f"Average Score: {team1} {team1_avg:.1f} ± {team1_std:.1f}, {team2} {team2_avg:.1f} ± {team2_std:.1f}")
+        print(f"Margin: {abs(margin):.1f} points (95% confidence interval: {margin_lower:.1f} to {margin_upper:.1f})")
+        print(f"Most Common Score: {team1} {most_common_score[0]} - {team2} {most_common_score[1]}")
         
-        print("\nAverage Score:")
-        print(f"{team1}: {team1_avg:.1f} ± {team1_std:.1f}")
-        print(f"{team2}: {team2_avg:.1f} ± {team2_std:.1f}")
-        print(f"Margin: {margin:.1f} points (95% confidence interval: {confidence_interval[0]:.1f} to {confidence_interval[1]:.1f})")
+        # Predicted final score (rounded to integers)
+        print(f"Predicted Final Score: {team1} {round(team1_avg)} - {team2} {round(team2_avg)}")
         
-        print("\nMost Common Score:")
-        print(f"{team1} {most_common_score[0]} - {team2} {most_common_score[1]}")
+        if histogram_path:
+            print(f"Score distribution histogram saved to {histogram_path}")
         
-        print("\nPredicted Final:")
-        print(f"{team1} {round(team1_avg)} - {team2} {round(team2_avg)}")
-        
-        # Generate score distribution histogram
-        histogram_path = self._generate_score_histogram(team1, team2, team1_scores, team2_scores)
-        print(f"\nScore distribution histogram saved to: {histogram_path}")
+        return {
+            "team1": team1,
+            "team2": team2,
+            "team1_win_pct": team1_win_pct,
+            "team2_win_pct": team2_win_pct,
+            "overtime_pct": overtime_pct,
+            "team1_avg": team1_avg,
+            "team2_avg": team2_avg,
+            "team1_std": team1_std,
+            "team2_std": team2_std,
+            "margin": margin,
+            "most_common_score": most_common_score,
+            "histogram_path": histogram_path
+        }
     
     def _generate_score_histogram(self, team1, team2, team1_scores, team2_scores):
         """
