@@ -790,7 +790,7 @@ class NcaaGameSimulatorV3:
         histogram_path = self._generate_score_histogram(team1, team2, team1_scores, team2_scores)
         
         # Determine predicted winner and loser for display
-        if team1_avg > team2_avg:
+        if team1_win_pct > team2_win_pct:
             predicted_winner = team1
             predicted_winner_score = round(team1_avg)
             predicted_loser = team2
@@ -800,6 +800,10 @@ class NcaaGameSimulatorV3:
             predicted_winner_score = round(team2_avg)
             predicted_loser = team1
             predicted_loser_score = round(team1_avg)
+        
+        # Ensure no tie in predicted score
+        if predicted_winner_score == predicted_loser_score:
+            predicted_winner_score += 1
         
         # Print results
         print("\n=== Simulation Results ===")
