@@ -139,7 +139,15 @@ def main():
             team1_margins = []  # Track margins for confidence calculation
             
             for _ in range(num_simulations):
-                score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
+                try:
+                    # Try the new V3 interface first (returns 3 values)
+                    score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
+                    if is_overtime:
+                        ties += 1
+                except ValueError:
+                    # Fall back to old interface (returns 2 values)
+                    score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
+                
                 team1_scores.append(score1)
                 team2_scores.append(score2)
                 team1_margins.append(score1 - score2)
@@ -148,8 +156,6 @@ def main():
                     team1_wins += 1
                 elif score2 > score1:
                     team2_wins += 1
-                else:
-                    ties += 1
             
             # Calculate statistics
             team1_avg = np.mean(team1_scores)
