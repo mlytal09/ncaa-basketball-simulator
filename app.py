@@ -62,21 +62,43 @@ def main():
         help="More simulations = more accurate results but slower"
     )
     
+    # Prepare the GitHub URL for stats directly
+    github_stats_url = "https://raw.githubusercontent.com/mlytal09/ncaa-basketball-simulator/main/stats/team_stats.csv"
+    
+    try:
+        # Load the team stats directly from GitHub
+        st.sidebar.info(f"Loading team stats from GitHub...")
+        team_stats_df = pd.read_csv(github_stats_url)
+        st.sidebar.success(f"Loaded {len(team_stats_df)} teams")
+    except Exception as e:
+        st.sidebar.error(f"Error loading team stats: {str(e)}")
+        st.error("Failed to load team statistics. Please check the GitHub repository.")
+        st.stop()
+    
     # Initialize simulator based on selection
     try:
         if simulator_version == "Standard (V2)":
             simulator = NcaaGameSimulatorV2()
+            # Manually set the team_stats attribute
+            if 'Team' in team_stats_df.columns:
+                team_stats_df['team_name'] = team_stats_df['Team']
+                team_stats_df['team_name_lower'] = team_stats_df['Team'].str.lower()
+                simulator.team_stats = team_stats_df.set_index('Team')
             st.sidebar.info("Using Standard simulator (V2)")
         elif simulator_version == "Advanced (V3)":
             simulator = NcaaGameSimulatorV3()
+            # Manually set the team_stats attribute
+            simulator.team_stats = team_stats_df
+            simulator.team_names = team_stats_df['Team'].tolist()
+            simulator.team_stats_indexed = team_stats_df.set_index(team_stats_df['Team'].str.lower())
             st.sidebar.info("Using Advanced simulator (V3) with improved accuracy")
         else:
             simulator = NcaaGameSimulatorV4()
+            # Manually set the team_stats attribute
+            simulator.team_stats = team_stats_df
+            simulator.team_names = team_stats_df['Team'].tolist()
+            simulator.team_stats_indexed = team_stats_df.set_index(team_stats_df['Team'].str.lower())
             st.sidebar.info("Using Premium simulator (V4) with latest enhancements")
-        
-        # Ensure team_stats is loaded
-        if simulator.team_stats is None:
-            simulator.load_team_stats()
         
         # Check if team_stats is available and has data
         if simulator.team_stats is None or len(simulator.team_stats) == 0:
@@ -98,28 +120,9 @@ def main():
             index=0
         ) == "Neutral Court"
         
-        # Get team options based on the simulator's team_stats index
-        if simulator_version in ["Advanced (V3)", "Premium (V4)"] and hasattr(simulator, 'team_names'):
-            team_options = sorted(simulator.team_names)
-            st.info(f"Using team_names list with {len(team_options)} teams.")
-        elif simulator_version == "Standard (V2)":
-            # For V2, if team_stats is a DataFrame (not Series), get the 'Team' column
-            if isinstance(simulator.team_stats, pd.DataFrame) and 'Team' in simulator.team_stats.columns:
-                team_options = sorted(simulator.team_stats['Team'].unique())
-                st.info(f"Using team_stats.Team column with {len(team_options)} teams.")
-            else:
-                # Otherwise use the index
-                team_options = sorted(list(simulator.team_stats.index))
-                st.info(f"Using team_stats index with {len(team_options)} teams.")
-        else:
-            # Fallback to using the DataFrame
-            if isinstance(simulator.team_stats, pd.DataFrame) and 'Team' in simulator.team_stats.columns:
-                team_options = sorted(list(simulator.team_stats['Team'].unique()))
-                st.info(f"Using Team column with {len(team_options)} teams.")
-            else:
-                # Last resort: use the index
-                team_options = sorted(list(simulator.team_stats.index))
-                st.info(f"Using index with {len(team_options)} teams.")
+        # Get team options directly from the loaded DataFrame
+        team_options = sorted(team_stats_df['Team'].tolist())
+        st.info(f"Using {len(team_options)} teams from team_stats.csv")
         
         if neutral_court:
             # Neutral court game
@@ -164,7 +167,7 @@ def main():
                     st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
             except Exception as e:
                 # Just ignore rivalry check errors
-                pass
+                st.warning(f"Could not check if this is a rivalry game: {str(e)}")
         
         # Create a button to run simulation
         run_button = st.button("Run Simulation", type="primary")
@@ -174,6 +177,59 @@ def main():
         with st.spinner(f"Simulating {num_simulations} games between {team1} and {team2}..."):
             # Show simulation info
             st.info(f"Court: {'Neutral' if neutral_court else f'{team1} home'}")
+            
+            # Apply a manual simulate_game function for V2 if needed
+            if simulator_version == "Standard (V2)" and not hasattr(simulator, 'simulate_game'):
+                def manual_simulate_game(team1, team2, neutral_court=False):
+                    """Manual implementation if the method is missing"""
+                    # Get team stats
+                    try:
+                        team1_stats = simulator.team_stats.loc[team1]
+                        team2_stats = simulator.team_stats.loc[team2]
+                    except KeyError:
+                        # Try lowercase
+                        team1_lower = team1.lower()
+                        team2_lower = team2.lower()
+                        for team in simulator.team_stats.index:
+                            if team.lower() == team1_lower:
+                                team1_stats = simulator.team_stats.loc[team]
+                                break
+                        for team in simulator.team_stats.index:
+                            if team.lower() == team2_lower:
+                                team2_stats = simulator.team_stats.loc[team]
+                                break
+                    
+                    # Simple model: use offensive and defensive ratings
+                    team1_off = team1_stats.get('AdjO', 100)
+                    team2_off = team2_stats.get('AdjO', 100)
+                    team1_def = team1_stats.get('AdjD', 100)
+                    team2_def = team2_stats.get('AdjD', 100)
+                    
+                    # Tempo impacts total points
+                    tempo = (team1_stats.get('Tempo', 70) + team2_stats.get('Tempo', 70)) / 2
+                    
+                    # Home court advantage
+                    if not neutral_court:
+                        team1_off *= 1.03  # 3% boost
+                        team2_def *= 0.97  # 3% worse
+                    
+                    # Calculate raw scores
+                    team1_raw = team1_off / team2_def * tempo / 2
+                    team2_raw = team2_off / team1_def * tempo / 2
+                    
+                    # Add variability
+                    team1_score = int(np.random.normal(team1_raw, 6))
+                    team2_score = int(np.random.normal(team2_raw, 6))
+                    
+                    # Ensure reasonable scores
+                    team1_score = max(50, min(110, team1_score))
+                    team2_score = max(50, min(110, team2_score))
+                    
+                    return team1_score, team2_score
+                
+                # Attach the manual function if needed
+                if not hasattr(simulator, 'simulate_game'):
+                    simulator.simulate_game = manual_simulate_game
             
             # Run simulations
             start_time = time.time()
@@ -192,8 +248,13 @@ def main():
                         score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
                         is_overtime = False  # V2 doesn't track overtime
                     else:
-                        # V3 and V4 return three values
-                        score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
+                        # V3 and V4 return three values (might need backup strategy)
+                        try:
+                            score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
+                        except ValueError:
+                            # Handle missing overtime return value
+                            score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
+                            is_overtime = False
                     
                     team1_scores.append(score1)
                     team2_scores.append(score2)
