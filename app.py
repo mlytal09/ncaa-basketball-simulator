@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 import matplotlib.pyplot as plt
 from scipy import stats
 from datetime import datetime
@@ -8,6 +9,11 @@ import time
 import base64
 from io import BytesIO
 import requests
+
+# Import simulator classes
+from ncaa_simv2 import NcaaGameSimulatorV2
+from ncaa_simv3 import NcaaGameSimulatorV3
+from ncaa_simv4 import NcaaGameSimulatorV4
 
 # Set page configuration
 st.set_page_config(
@@ -24,195 +30,6 @@ def get_image_download_link(fig, filename, text):
     b64 = base64.b64encode(buf.read()).decode()
     href = f'<a href="data:image/png;base64,{b64}" download="{filename}">Download {text}</a>'
     return href
-
-# Simple simulator class that doesn't rely on external imports
-class SimpleSimulator:
-    def __init__(self):
-        self.team_stats = None
-        self.team_names = []
-        self.rivalries = [
-            ('Duke', 'North Carolina'),
-            ('Kentucky', 'Louisville'),
-            ('Kansas', 'Kansas St'),
-            ('Indiana', 'Purdue'),
-            ('Michigan', 'Michigan St'),
-            ('UCLA', 'USC'),
-            ('Alabama', 'Auburn'),
-            ('Florida', 'Florida St'),
-            ('Gonzaga', 'Saint Mary\'s')
-        ]
-        
-    def load_team_stats(self, df):
-        self.team_stats = df
-        # Check if team_name column exists, otherwise try Team
-        if 'team_name' in df.columns:
-            self.team_names = df['team_name'].tolist()
-            # Rename to Team for consistency
-            df.rename(columns={'team_name': 'Team'}, inplace=True)
-        elif 'Team' in df.columns:
-            self.team_names = df['Team'].tolist()
-        
-    def is_rivalry_game(self, team1, team2):
-        """Check if two teams are rivals"""
-        for rival1, rival2 in self.rivalries:
-            if (team1 in rival1 and team2 in rival2) or (team2 in rival1 and team1 in rival2):
-                return True
-        return False
-    
-    def get_default_stats(self):
-        """Return default stats for teams not found in the dataset"""
-        return {
-            'AdjO': 100.0,
-            'AdjD': 100.0,
-            'Tempo': 68.0
-        }
-        
-    def simulate_game(self, team1, team2, neutral_court=False, version="V2"):
-        """Simulation logic with different behavior for different versions"""
-        try:
-            # Get team stats
-            team1_row = self.team_stats[self.team_stats['Team'] == team1]
-            team2_row = self.team_stats[self.team_stats['Team'] == team2]
-            
-            # Use default stats if teams not found
-            if team1_row.empty:
-                st.warning(f"Team data not found for {team1}, using default values")
-                team1_stats = self.get_default_stats()
-            else:
-                team1_stats = team1_row.iloc[0].to_dict()
-                
-            if team2_row.empty:
-                st.warning(f"Team data not found for {team2}, using default values")
-                team2_stats = self.get_default_stats()
-            else:
-                team2_stats = team2_row.iloc[0].to_dict()
-            
-            # Use offensive and defensive ratings
-            team1_off = float(team1_stats.get('AdjO', 100.0))
-            team2_off = float(team2_stats.get('AdjO', 100.0))
-            team1_def = float(team1_stats.get('AdjD', 100.0))
-            team2_def = float(team2_stats.get('AdjD', 100.0))
-            
-            # Tempo impacts total points
-            tempo1 = float(team1_stats.get('Tempo', 68.0))
-            tempo2 = float(team2_stats.get('Tempo', 68.0))
-            tempo = (tempo1 + tempo2) / 2
-            
-            # Home court advantage
-            if not neutral_court:
-                if version == "V2":
-                    team1_off *= 1.03  # 3% boost
-                    team2_def *= 0.97  # 3% worse
-                elif version == "V3":
-                    team1_off *= 1.04  # 4% boost
-                    team2_def *= 0.96  # 4% worse
-                else:  # V4
-                    team1_off *= 1.05  # 5% boost
-                    team2_def *= 0.95  # 5% worse
-            
-            # Rivalry game adjustment
-            if self.is_rivalry_game(team1, team2):
-                if version == "V2":
-                    # Make games closer in rivalry games
-                    team1_off = team1_off * 0.9 + team2_off * 0.1
-                    team2_off = team2_off * 0.9 + team1_off * 0.1
-                elif version == "V3":
-                    # More dramatic effect in V3
-                    team1_off = team1_off * 0.85 + team2_off * 0.15
-                    team2_off = team2_off * 0.85 + team1_off * 0.15
-                    # Add more variance
-                    team1_off *= np.random.uniform(0.95, 1.05)
-                    team2_off *= np.random.uniform(0.95, 1.05)
-                else:  # V4
-                    # Even more dramatic in V4
-                    team1_off = team1_off * 0.8 + team2_off * 0.2
-                    team2_off = team2_off * 0.8 + team1_off * 0.2
-                    # Add even more variance
-                    team1_off *= np.random.uniform(0.93, 1.07)
-                    team2_off *= np.random.uniform(0.93, 1.07)
-            
-            # Base calculation for expected points
-            # Points = (Offensive Rating / Defensive Rating) * (Tempo / 2)
-            # This gives each team's expected points in a game
-            
-            # Calculate raw scores based on version
-            if version == "V2":
-                base_factor = 0.5  # Standard divisor
-                team1_raw = (team1_off / team2_def) * (tempo * base_factor)
-                team2_raw = (team2_off / team1_def) * (tempo * base_factor)
-            elif version == "V3":
-                base_factor = 0.525  # Slightly higher scores
-                team1_raw = (team1_off / team2_def) * (tempo * base_factor)
-                team2_raw = (team2_off / team1_def) * (tempo * base_factor)
-                # Add some additional factors
-                team1_raw *= (1 + 0.02 * np.random.randn())
-                team2_raw *= (1 + 0.02 * np.random.randn())
-            else:  # V4
-                base_factor = 0.55  # Even higher scores
-                team1_raw = (team1_off / team2_def) * (tempo * base_factor)
-                team2_raw = (team2_off / team1_def) * (tempo * base_factor)
-                
-                # Add conference strength factor
-                conf1 = team1_stats.get('Conerence', 'Unknown')
-                conf2 = team2_stats.get('Conerence', 'Unknown')
-                
-                # Conference strength adjustments
-                power_conferences = ['B12', 'SEC', 'B10', 'ACC', 'BE']
-                conf_boost1 = 1.02 if conf1 in power_conferences else 1.0
-                conf_boost2 = 1.02 if conf2 in power_conferences else 1.0
-                    
-                team1_raw *= conf_boost1
-                team2_raw *= conf_boost2
-                
-                # Add some additional factors
-                team1_raw *= (1 + 0.03 * np.random.randn())
-                team2_raw *= (1 + 0.03 * np.random.randn())
-            
-            # Add variability (more for V3/V4)
-            if version == "V2":
-                std_dev = 6
-            elif version == "V3":
-                std_dev = 8
-            else:  # V4
-                std_dev = 9
-                
-            team1_score = int(np.random.normal(team1_raw, std_dev))
-            team2_score = int(np.random.normal(team2_raw, std_dev))
-            
-            # Ensure reasonable scores (minimum 50, maximum 110)
-            team1_score = max(50, min(110, team1_score))
-            team2_score = max(50, min(110, team2_score))
-            
-            # For V3/V4 compatibility, add overtime flag
-            if version == "V2":
-                is_overtime = abs(team1_score - team2_score) <= 3 and np.random.random() < 0.05
-            elif version == "V3":
-                is_overtime = abs(team1_score - team2_score) <= 4 and np.random.random() < 0.07
-            else:  # V4
-                is_overtime = abs(team1_score - team2_score) <= 5 and np.random.random() < 0.09
-            
-            # Adjust scores for overtime
-            if is_overtime:
-                # Add overtime points
-                ot_points1 = np.random.randint(5, 12)
-                ot_points2 = np.random.randint(5, 12)
-                team1_score += ot_points1
-                team2_score += ot_points2
-                
-                # Ensure one team wins in overtime
-                if team1_score == team2_score:
-                    if np.random.random() < 0.5:
-                        team1_score += 1
-                    else:
-                        team2_score += 1
-            
-            return team1_score, team2_score, is_overtime
-        except Exception as e:
-            st.error(f"Error in simulation: {str(e)}")
-            # Return fallback values with some randomness
-            base1 = 70 + np.random.randint(-10, 10)
-            base2 = 65 + np.random.randint(-10, 10)
-            return base1, base2, False
 
 def main():
     # Add a title and description
@@ -250,58 +67,38 @@ def main():
     progress_bar = st.sidebar.progress(0)
     
     try:
+        # Create stats directory if it doesn't exist
+        os.makedirs("stats", exist_ok=True)
+        
         # Load the team stats directly from GitHub
         st.sidebar.info(f"Loading team stats from GitHub...")
         
         # Try to fetch the data with a timeout
         response = requests.get(github_stats_url, timeout=10)
         if response.status_code == 200:
-            # Save to a temporary file and read with pandas
-            with open("temp_stats.csv", "w") as f:
+            # Save to a file in the stats directory
+            with open("stats/team_stats.csv", "w") as f:
                 f.write(response.text)
-            team_stats_df = pd.read_csv("temp_stats.csv")
             progress_bar.progress(50)
-            st.sidebar.success(f"Loaded {len(team_stats_df)} teams")
+            st.sidebar.success(f"Team stats downloaded successfully")
         else:
             st.sidebar.error(f"Failed to load team stats: HTTP {response.status_code}")
-            # Create a minimal dataset for demonstration
-            team_stats_df = pd.DataFrame({
-                'team_name': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
-                'Conerence': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
-                'AdjO': [118.9, 124.2, 123.5, 120.1, 117.8],
-                'AdjD': [89.5, 94.1, 88.2, 85.6, 88.1],
-                'Tempo': [73.2, 72.8, 69.8, 65.2, 67.7]
-            })
-            st.sidebar.warning("Using minimal dataset for demonstration")
     except Exception as e:
-        st.sidebar.error(f"Error loading team stats: {str(e)}")
-        # Create a minimal dataset for demonstration
-        team_stats_df = pd.DataFrame({
-            'team_name': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
-            'Conerence': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
-            'AdjO': [118.9, 124.2, 123.5, 120.1, 117.8],
-            'AdjD': [89.5, 94.1, 88.2, 85.6, 88.1],
-            'Tempo': [73.2, 72.8, 69.8, 65.2, 67.7]
-        })
-        st.sidebar.warning("Using minimal dataset for demonstration")
+        st.sidebar.error(f"Error downloading team stats: {str(e)}")
     
     progress_bar.progress(75)
     
-    # Initialize simulator
+    # Initialize simulator based on version
     try:
-        # Use our simple simulator that doesn't rely on imports
-        simulator = SimpleSimulator()
-        simulator.load_team_stats(team_stats_df)
-        
         if simulator_version == "Standard (V2)":
+            simulator = NcaaGameSimulatorV2(stats_dir="stats")
             st.sidebar.info("Using Standard simulator (V2)")
-            version_code = "V2"
         elif simulator_version == "Advanced (V3)":
+            simulator = NcaaGameSimulatorV3(stats_dir="stats")
             st.sidebar.info("Using Advanced simulator (V3) with improved accuracy")
-            version_code = "V3"
         else:
+            simulator = NcaaGameSimulatorV4(stats_dir="stats")
             st.sidebar.info("Using Premium simulator (V4) with latest enhancements")
-            version_code = "V4"
     except Exception as e:
         st.error(f"Error initializing simulator: {str(e)}")
         st.stop()
@@ -320,8 +117,17 @@ def main():
             index=0
         ) == "Neutral Court"
         
-        # Get team options directly from the loaded DataFrame
-        team_options = sorted(simulator.team_names)
+        # Get team options from the simulator
+        if hasattr(simulator, 'team_stats') and simulator.team_stats is not None:
+            if simulator.team_stats.index.name == 'team_name':
+                team_options = sorted(simulator.team_stats.index.tolist())
+            else:
+                # Fallback if index is not team_name
+                team_options = sorted(simulator.team_stats.iloc[:, 0].tolist())
+        else:
+            # Fallback if team_stats is not available
+            team_options = ["Team A", "Team B", "Team C", "Team D", "Team E"]
+        
         st.info(f"Using {len(team_options)} teams from team_stats.csv")
         
         if neutral_court:
@@ -360,9 +166,13 @@ def main():
         st.write("")
         st.write("")
         
-        # Check for rivalry game
-        if simulator.is_rivalry_game(team1, team2):
-            st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
+        # Check for rivalry game if the simulator has that method
+        if hasattr(simulator, 'is_rivalry_game') and callable(getattr(simulator, 'is_rivalry_game')):
+            try:
+                if simulator.is_rivalry_game(team1, team2):
+                    st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
+            except:
+                pass
         
         # Create a button to run simulation
         run_button = st.button("Run Simulation", type="primary")
@@ -375,45 +185,68 @@ def main():
             
             # Run simulations
             start_time = time.time()
-            team1_wins = 0
-            team2_wins = 0
-            overtime_games = 0
-            team1_scores = []
-            team2_scores = []
-            team1_margins = []  # Track margins for confidence calculation
             
-            # Create a progress bar for simulations
-            sim_progress = st.progress(0)
-            
-            for i in range(num_simulations):
-                # Update progress every 5% of simulations
-                if i % max(1, num_simulations // 20) == 0:
-                    sim_progress.progress(i / num_simulations)
-                
-                # Run simulation
-                try:
-                    score1, score2, is_overtime = simulator.simulate_game(
-                        team1, team2, neutral_court, version=version_code
-                    )
+            try:
+                # Use the run_simulation method if available
+                if hasattr(simulator, 'run_simulation') and callable(getattr(simulator, 'run_simulation')):
+                    results = simulator.run_simulation(team1, team2, neutral_court=neutral_court, num_simulations=num_simulations)
                     
-                    team1_scores.append(score1)
-                    team2_scores.append(score2)
-                    team1_margins.append(score1 - score2)
+                    # Extract results
+                    team1_wins = results.get('team1_wins', 0)
+                    team2_wins = results.get('team2_wins', 0)
+                    overtime_games = results.get('overtime_games', 0)
+                    team1_scores = results.get('team1_scores', [])
+                    team2_scores = results.get('team2_scores', [])
+                    team1_margins = [team1_scores[i] - team2_scores[i] for i in range(len(team1_scores))]
+                else:
+                    # Fallback to manual simulation if run_simulation is not available
+                    team1_wins = 0
+                    team2_wins = 0
+                    overtime_games = 0
+                    team1_scores = []
+                    team2_scores = []
+                    team1_margins = []
                     
-                    if score1 > score2:
-                        team1_wins += 1
-                    elif score2 > score1:
-                        team2_wins += 1
+                    # Create a progress bar for simulations
+                    sim_progress = st.progress(0)
                     
-                    if is_overtime:
-                        overtime_games += 1
-                except Exception as e:
-                    st.error(f"Error in simulation: {str(e)}")
-                    st.error(f"Team 1: {team1}, Team 2: {team2}")
-                    st.stop()
-            
-            # Complete the progress bar
-            sim_progress.progress(1.0)
+                    for i in range(num_simulations):
+                        # Update progress every 5% of simulations
+                        if i % max(1, num_simulations // 20) == 0:
+                            sim_progress.progress(i / num_simulations)
+                        
+                        # Run simulation
+                        result = simulator.simulate_game(team1, team2, neutral_court=neutral_court)
+                        
+                        # Extract scores and overtime flag
+                        if isinstance(result, tuple) and len(result) >= 2:
+                            score1 = result[0]
+                            score2 = result[1]
+                            is_overtime = result[2] if len(result) > 2 else False
+                        else:
+                            # Fallback if result format is unexpected
+                            score1 = result.get('team1_score', 70)
+                            score2 = result.get('team2_score', 65)
+                            is_overtime = result.get('is_overtime', False)
+                        
+                        team1_scores.append(score1)
+                        team2_scores.append(score2)
+                        team1_margins.append(score1 - score2)
+                        
+                        if score1 > score2:
+                            team1_wins += 1
+                        elif score2 > score1:
+                            team2_wins += 1
+                        
+                        if is_overtime:
+                            overtime_games += 1
+                    
+                    # Complete the progress bar
+                    sim_progress.progress(1.0)
+            except Exception as e:
+                st.error(f"Error in simulation: {str(e)}")
+                st.error(f"Team 1: {team1}, Team 2: {team2}")
+                st.stop()
             
             # Calculate statistics
             team1_avg = np.mean(team1_scores)
@@ -489,30 +322,74 @@ def main():
         
         # Generate and display score distribution histograms
         st.subheader("Score Distributions")
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
-        # Team 1 histogram
-        ax1.hist(team1_scores, bins=range(min(team1_scores)-5, max(team1_scores)+5), color='blue', alpha=0.7)
-        ax1.axvline(np.mean(team1_scores), color='red', linestyle='dashed', linewidth=2)
-        ax1.set_xlabel('Points')
-        ax1.set_ylabel('Frequency')
-        ax1.set_title(f'{team1} Score Distribution')
-        
-        # Team 2 histogram
-        ax2.hist(team2_scores, bins=range(min(team2_scores)-5, max(team2_scores)+5), color='green', alpha=0.7)
-        ax2.axvline(np.mean(team2_scores), color='red', linestyle='dashed', linewidth=2)
-        ax2.set_xlabel('Points')
-        ax2.set_ylabel('Frequency')
-        ax2.set_title(f'{team2} Score Distribution')
-        
-        plt.tight_layout()
-        st.pyplot(fig)
-        
-        # Provide download link using in-memory buffer instead of file
-        st.markdown(get_image_download_link(fig, 
-                                          f"{team1}_vs_{team2}.png", 
-                                          "Histogram"), 
-                  unsafe_allow_html=True)
+        # Use the simulator's histogram function if available
+        if hasattr(simulator, '_generate_score_histogram') and callable(getattr(simulator, '_generate_score_histogram')):
+            try:
+                # Create simulation_results directory if it doesn't exist
+                os.makedirs("simulation_results", exist_ok=True)
+                
+                # Generate histogram using the simulator's method
+                histogram_path = simulator._generate_score_histogram(team1, team2, team1_scores, team2_scores)
+                
+                # Display the histogram
+                st.image(histogram_path)
+                
+                # Provide download link
+                st.markdown(f"[Download Histogram]({histogram_path})", unsafe_allow_html=True)
+            except Exception as e:
+                # Fallback to manual histogram generation
+                st.error(f"Error generating histogram with simulator: {str(e)}")
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+                
+                # Team 1 histogram
+                ax1.hist(team1_scores, bins=range(min(team1_scores)-5, max(team1_scores)+5), color='blue', alpha=0.7)
+                ax1.axvline(np.mean(team1_scores), color='red', linestyle='dashed', linewidth=2)
+                ax1.set_xlabel('Points')
+                ax1.set_ylabel('Frequency')
+                ax1.set_title(f'{team1} Score Distribution')
+                
+                # Team 2 histogram
+                ax2.hist(team2_scores, bins=range(min(team2_scores)-5, max(team2_scores)+5), color='green', alpha=0.7)
+                ax2.axvline(np.mean(team2_scores), color='red', linestyle='dashed', linewidth=2)
+                ax2.set_xlabel('Points')
+                ax2.set_ylabel('Frequency')
+                ax2.set_title(f'{team2} Score Distribution')
+                
+                plt.tight_layout()
+                st.pyplot(fig)
+                
+                # Provide download link using in-memory buffer
+                st.markdown(get_image_download_link(fig, 
+                                                  f"{team1}_vs_{team2}.png", 
+                                                  "Histogram"), 
+                          unsafe_allow_html=True)
+        else:
+            # Manual histogram generation
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            
+            # Team 1 histogram
+            ax1.hist(team1_scores, bins=range(min(team1_scores)-5, max(team1_scores)+5), color='blue', alpha=0.7)
+            ax1.axvline(np.mean(team1_scores), color='red', linestyle='dashed', linewidth=2)
+            ax1.set_xlabel('Points')
+            ax1.set_ylabel('Frequency')
+            ax1.set_title(f'{team1} Score Distribution')
+            
+            # Team 2 histogram
+            ax2.hist(team2_scores, bins=range(min(team2_scores)-5, max(team2_scores)+5), color='green', alpha=0.7)
+            ax2.axvline(np.mean(team2_scores), color='red', linestyle='dashed', linewidth=2)
+            ax2.set_xlabel('Points')
+            ax2.set_ylabel('Frequency')
+            ax2.set_title(f'{team2} Score Distribution')
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+            
+            # Provide download link using in-memory buffer
+            st.markdown(get_image_download_link(fig, 
+                                              f"{team1}_vs_{team2}.png", 
+                                              "Histogram"), 
+                      unsafe_allow_html=True)
 
 if __name__ == "__main__":
     try:
