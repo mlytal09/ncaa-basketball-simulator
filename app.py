@@ -8,6 +8,10 @@ from datetime import datetime
 import time
 import base64
 from io import BytesIO
+import sys
+
+# Add the current directory to the path so imports work correctly
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Import simulator classes
 from ncaa_simv2 import NcaaGameSimulatorV2
@@ -45,7 +49,7 @@ def main():
     simulator_version = st.sidebar.radio(
         "Simulator Version",
         ["Standard (V2)", "Advanced (V3)", "Premium (V4)"],
-        index=1,  # Default to V3
+        index=0,  # Default to V2 since that's working
         help="Standard: Basic simulator with fundamental team metrics. Advanced: Enhanced model with rivalry detection, team form tracking, and improved outcome predictions. Premium: Latest version with additional refinements."
     )
     
@@ -95,19 +99,27 @@ def main():
         ) == "Neutral Court"
         
         # Get team options based on the simulator's team_stats index
-        # For V3 and V4, use the team_names list
         if simulator_version in ["Advanced (V3)", "Premium (V4)"] and hasattr(simulator, 'team_names'):
             team_options = sorted(simulator.team_names)
-        # For V2, use the index directly
+            st.info(f"Using team_names list with {len(team_options)} teams.")
         elif simulator_version == "Standard (V2)":
-            team_options = sorted(list(simulator.team_stats.index))
+            # For V2, if team_stats is a DataFrame (not Series), get the 'Team' column
+            if isinstance(simulator.team_stats, pd.DataFrame) and 'Team' in simulator.team_stats.columns:
+                team_options = sorted(simulator.team_stats['Team'].unique())
+                st.info(f"Using team_stats.Team column with {len(team_options)} teams.")
+            else:
+                # Otherwise use the index
+                team_options = sorted(list(simulator.team_stats.index))
+                st.info(f"Using team_stats index with {len(team_options)} teams.")
         else:
             # Fallback to using the DataFrame
-            if 'Team' in simulator.team_stats.columns:
+            if isinstance(simulator.team_stats, pd.DataFrame) and 'Team' in simulator.team_stats.columns:
                 team_options = sorted(list(simulator.team_stats['Team'].unique()))
+                st.info(f"Using Team column with {len(team_options)} teams.")
             else:
                 # Last resort: use the index
                 team_options = sorted(list(simulator.team_stats.index))
+                st.info(f"Using index with {len(team_options)} teams.")
         
         if neutral_court:
             # Neutral court game
@@ -196,6 +208,7 @@ def main():
                         overtime_games += 1
                 except Exception as e:
                     st.error(f"Error in simulation: {str(e)}")
+                    st.error(f"Team 1: {team1}, Team 2: {team2}")
                     st.stop()
             
             # Calculate statistics
