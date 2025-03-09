@@ -71,8 +71,12 @@ if st.button("Run Simulation"):
             st.error("Please enter both team names.")
             st.stop()
 
-        # Validate teams exist
-        if not simulator.check_team_exists(team1_name):
+        # Convert team names to lowercase for checking
+        team1_lower = team1_name.lower()
+        team2_lower = team2_name.lower()
+
+        # Validate teams exist using team_stats index
+        if team1_lower not in simulator.team_stats.index:
             similar_teams = simulator.find_similar_teams(team1_name)
             if similar_teams:
                 st.warning(f"Team '{team1_name}' not found. Did you mean one of these? {', '.join(similar_teams)}")
@@ -80,7 +84,7 @@ if st.button("Run Simulation"):
                 st.error(f"Team '{team1_name}' not found.")
             st.stop()
 
-        if not simulator.check_team_exists(team2_name):
+        if team2_lower not in simulator.team_stats.index:
             similar_teams = simulator.find_similar_teams(team2_name)
             if similar_teams:
                 st.warning(f"Team '{team2_name}' not found. Did you mean one of these? {', '.join(similar_teams)}")
