@@ -8,7 +8,11 @@ from datetime import datetime
 import time
 import base64
 from io import BytesIO
-import traceback
+
+# Import simulator classes
+from ncaa_simv2 import NcaaGameSimulatorV2
+from ncaa_simv3 import NcaaGameSimulatorV3
+from ncaa_simv4 import NcaaGameSimulatorV4
 
 # Set page configuration
 st.set_page_config(
@@ -26,134 +30,25 @@ def get_image_download_link(fig, filename, text):
     href = f'<a href="data:image/png;base64,{b64}" download="{filename}">Download {text}</a>'
     return href
 
-# Initialize simulator based on version
-@st.cache_resource(show_spinner=False)
-def get_simulator(version):
-    """Initialize and return the appropriate simulator version"""
-    try:
-        if version == "V2":
-            from ncaa_simv2 import NcaaGameSimulatorV2
-            return NcaaGameSimulatorV2()
-        elif version == "V3":
-            from ncaa_simv3 import NcaaGameSimulatorV3
-            return NcaaGameSimulatorV3()
-        elif version == "V4":
-            from ncaa_simv4 import NcaaGameSimulatorV4
-            return NcaaGameSimulatorV4()
-        else:
-            st.error(f"Unknown simulator version: {version}")
-            return None
-    except Exception as e:
-        st.error(f"Error initializing simulator: {str(e)}")
-        st.error(traceback.format_exc())
-        return None
-
-# Get team names from simulator
-def get_team_names(simulator_instance):
-    """Get sorted list of team names from simulator"""
-    if simulator_instance is None:
-        return []
-    
-    try:
-        if not hasattr(simulator_instance, 'team_stats'):
-            return []
-            
-        # Handle different index types safely
-        if isinstance(simulator_instance.team_stats.index, pd.Index):
-            # Convert all index values to strings
-            return sorted([str(name) for name in simulator_instance.team_stats.index.tolist()])
-        else:
-            return []
-    except Exception as e:
-        st.error(f"Error getting team names: {str(e)}")
-        st.error(traceback.format_exc())
-        return []
-
-# Check available simulator versions
-def get_available_versions():
-    versions = []
-    try:
-        import ncaa_simv2
-        versions.append("V2")
-    except ImportError:
-        pass
-    
-    try:
-        import ncaa_simv3
-        versions.append("V3")
-    except ImportError:
-        pass
-    
-    try:
-        import ncaa_simv4
-        versions.append("V4")
-    except ImportError:
-        pass
-    
-    return versions
-
-# Main function
 def main():
     # Add a title and description
-    st.title("NCAA Basketball Game Simulator 🏀")
+    st.title("NCAA Basketball Game Simulator")
     st.markdown("""
     This app simulates NCAA basketball games based on team statistics.
     Select teams and simulation settings below to see predicted outcomes.
-    
-    Data is loaded from team_stats.csv which includes team statistics and conference information.
     """)
-    
-    # Get available versions
-    AVAILABLE_VERSIONS = get_available_versions()
-    if not AVAILABLE_VERSIONS:
-        st.error("No simulator versions found. Please check that the simulator files are in the correct location.")
-        return
     
     # Create sidebar for simulation settings
     st.sidebar.header("Simulation Settings")
     
     # Add option to choose simulator version
-    version_descriptions = {
-        "V2": "Basic simulator with fundamental team metrics",
-        "V3": "Enhanced model with rivalry detection and team form tracking",
-        "V4": "Latest version with improved scoring model and tempo control"
-    }
-    
     simulator_version = st.sidebar.radio(
         "Simulator Version",
-        AVAILABLE_VERSIONS,
-        index=min(2, len(AVAILABLE_VERSIONS)-1),  # Default to V4 if available
-        help="Choose which version of the simulator to use"
+        ["Standard (V2)", "Advanced (V3)", "Premium (V4)"],
+        index=1,  # Default to V3
+        help="Standard: Basic simulator with fundamental team metrics. Advanced: Enhanced model with rivalry detection, team form tracking, and improved outcome predictions. Premium: Latest version with additional refinements."
     )
     
-    # Show version description
-    if simulator_version in version_descriptions:
-        st.sidebar.info(version_descriptions[simulator_version])
-    
-    # Initialize simulator based on selection
-    with st.spinner(f"Loading {simulator_version} simulator..."):
-        simulator = get_simulator(simulator_version)
-    
-    if simulator is None:
-        st.error("Failed to initialize simulator. Please check the logs for details.")
-        return
-    
-    # Get team names for dropdowns
-    team_names = get_team_names(simulator)
-    if not team_names:
-        st.error("No team data available. Please check that team_stats.csv is properly formatted and located in the stats directory.")
-        
-        # Debug information
-        st.error("Debug information:")
-        if hasattr(simulator, 'team_stats'):
-            st.error(f"team_stats type: {type(simulator.team_stats)}")
-            st.error(f"team_stats index type: {type(simulator.team_stats.index)}")
-            st.error(f"team_stats columns: {simulator.team_stats.columns.tolist()}")
-        else:
-            st.error("simulator does not have team_stats attribute")
-        return
-    
-    # Number of simulations slider
     num_simulations = st.sidebar.slider(
         "Number of Simulations", 
         min_value=1000, 
@@ -163,44 +58,70 @@ def main():
         help="More simulations = more accurate results but slower"
     )
     
+    # Initialize simulator based on selection
+    try:
+        if simulator_version == "Standard (V2)":
+            simulator = NcaaGameSimulatorV2()
+            st.sidebar.info("Using Standard simulator (V2)")
+        elif simulator_version == "Advanced (V3)":
+            simulator = NcaaGameSimulatorV3()
+            st.sidebar.info("Using Advanced simulator (V3) with improved accuracy")
+        else:
+            simulator = NcaaGameSimulatorV4()
+            st.sidebar.info("Using Premium simulator (V4) with latest enhancements")
+        
+        # Ensure team_stats is loaded
+        if simulator.team_stats is None:
+            simulator.load_team_stats()
+        
+        # Check if team_stats is available and has data
+        if simulator.team_stats is None or len(simulator.team_stats) == 0:
+            st.error("Failed to load team statistics. Please check that the team_stats.csv file exists in the correct location.")
+            st.stop()
+    except Exception as e:
+        st.error(f"Error initializing simulator: {str(e)}")
+        st.stop()
+    
     # Create columns for the main UI
     col1, col2 = st.columns(2)
     
     # Game setup
     with col1:
         st.subheader("Game Setup")
-        court_type = st.radio(
+        neutral_court = st.radio(
             "Court Type", 
             ["Home/Away", "Neutral Court"], 
             index=0
-        )
-        neutral_court = (court_type == "Neutral Court")
+        ) == "Neutral Court"
+        
+        # Get team options based on the simulator's team_stats index
+        team_options = sorted(list(simulator.team_stats.index))
         
         if neutral_court:
             # Neutral court game
             team1 = st.selectbox(
                 "Select Team 1:",
-                options=team_names,
+                options=team_options,
                 index=0
             )
             
             team2 = st.selectbox(
                 "Select Team 2:",
-                options=team_names,
-                index=min(1, len(team_names)-1)
+                options=team_options,
+                index=min(1, len(team_options)-1)
             )
         else:
             # Home/Away game
             team1 = st.selectbox(
                 "Select Home Team:",
-                options=team_names,
+                options=team_options,
                 index=0
             )
             
             team2 = st.selectbox(
                 "Select Away Team:",
-                options=team_names,
-                index=min(1, len(team_names)-1)
+                options=team_options,
+                index=min(1, len(team_options)-1)
             )
     
     # Run simulation button
@@ -212,23 +133,16 @@ def main():
         st.write("")
         st.write("")
         
-        # Check for rivalry game if using V3 or V4
-        if simulator_version in ["V3", "V4"] and hasattr(simulator, 'is_rivalry_game'):
-            try:
-                if simulator.is_rivalry_game(team1, team2):
-                    st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
-            except Exception as e:
-                st.info(f"Could not check for rivalry: {e}")
+        # Check for rivalry game if using V3
+        if simulator_version == "Advanced (V3)" and hasattr(simulator, 'is_rivalry_game'):
+            if simulator.is_rivalry_game(team1, team2):
+                st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
         
         # Create a button to run simulation
         run_button = st.button("Run Simulation", type="primary")
     
     # Run the simulation when the button is clicked
     if run_button:
-        if team1 == team2:
-            st.error("Please select different teams for the simulation.")
-            return
-            
         with st.spinner(f"Simulating {num_simulations} games between {team1} and {team2}..."):
             # Show simulation info
             st.info(f"Court: {'Neutral' if neutral_court else f'{team1} home'}")
@@ -237,66 +151,51 @@ def main():
             start_time = time.time()
             team1_wins = 0
             team2_wins = 0
-            overtime_games = 0
+            ties = 0
             team1_scores = []
             team2_scores = []
             team1_margins = []  # Track margins for confidence calculation
+            overtime_games = 0
             
-            progress_bar = st.progress(0)
+            for _ in range(num_simulations):
+                # Handle different simulator versions
+                if simulator_version == "Standard (V2)":
+                    # V2 returns only two values
+                    score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
+                    is_overtime = False  # V2 doesn't track overtime
+                else:
+                    # V3 and V4 return three values
+                    score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
+                
+                team1_scores.append(score1)
+                team2_scores.append(score2)
+                team1_margins.append(score1 - score2)
+                
+                if score1 > score2:
+                    team1_wins += 1
+                elif score2 > score1:
+                    team2_wins += 1
+                
+                if is_overtime:
+                    overtime_games += 1
             
-            try:
-                for i in range(num_simulations):
-                    try:
-                        # Try the new V3/V4 interface first (returns 3 values)
-                        score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
-                        if is_overtime:
-                            overtime_games += 1
-                    except ValueError:
-                        # Fall back to old interface (returns 2 values)
-                        score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
-                    except Exception as e:
-                        st.error(f"Error during simulation: {e}")
-                        st.error(traceback.format_exc())
-                        break
-                    
-                    team1_scores.append(score1)
-                    team2_scores.append(score2)
-                    team1_margins.append(score1 - score2)
-                    
-                    if score1 > score2:
-                        team1_wins += 1
-                    elif score2 > score1:
-                        team2_wins += 1
-                    
-                    # Update progress bar every 5% of simulations
-                    if i % max(1, num_simulations // 20) == 0:
-                        progress_bar.progress(i / num_simulations)
-                
-                # Complete progress bar
-                progress_bar.progress(1.0)
-                
-                # Calculate statistics
-                team1_avg = np.mean(team1_scores)
-                team2_avg = np.mean(team2_scores)
-                team1_std = np.std(team1_scores)
-                team2_std = np.std(team2_scores)
-                margin = team1_avg - team2_avg
-                margin_std = np.std(team1_margins)
-                
-                # Calculate confidence interval for the margin
-                confidence_interval = stats.norm.interval(0.95, loc=margin, scale=margin_std/np.sqrt(num_simulations))
-                
-                # Find most common score
-                from collections import Counter
-                score_pairs = [(int(team1_scores[i]), int(team2_scores[i])) for i in range(num_simulations)]
-                most_common_score = Counter(score_pairs).most_common(1)[0][0]
-                
-                sim_time = time.time() - start_time
+            # Calculate statistics
+            team1_avg = np.mean(team1_scores)
+            team2_avg = np.mean(team2_scores)
+            team1_std = np.std(team1_scores)
+            team2_std = np.std(team2_scores)
+            margin = team1_avg - team2_avg
+            margin_std = np.std(team1_margins)
             
-            except Exception as e:
-                st.error(f"Error during simulation calculations: {e}")
-                st.error(traceback.format_exc())
-                return
+            # Calculate confidence interval for the margin
+            confidence_interval = stats.norm.interval(0.95, loc=margin, scale=margin_std/np.sqrt(num_simulations))
+            
+            # Find most common score
+            from collections import Counter
+            score_pairs = [(team1_scores[i], team2_scores[i]) for i in range(num_simulations)]
+            most_common_score = Counter(score_pairs).most_common(1)[0][0]
+            
+            sim_time = time.time() - start_time
         
         # Display results in a nice format
         st.success(f"Simulation completed in {sim_time:.2f} seconds")
@@ -329,8 +228,8 @@ def main():
             st.write(f"{team2}: {team2_wins/num_simulations*100:.1f}%")
             st.write(f"Chance of Overtime: {overtime_games/num_simulations*100:.1f}%")
             
-            # Confidence rating (V3/V4 feature)
-            if simulator_version in ["V3", "V4"]:
+            # Confidence rating (V3 feature)
+            if simulator_version == "Advanced (V3)":
                 confidence_rating = min(5, max(1, int(abs(team1_wins - team2_wins) / (num_simulations * 0.1))))
                 confidence_stars = "★" * confidence_rating + "☆" * (5 - confidence_rating)
                 st.write(f"Prediction Confidence: {confidence_stars}")
@@ -343,8 +242,8 @@ def main():
             st.write(f"{team2}: {team2_avg:.1f} ± {team2_std:.1f}")
             st.write(f"Margin: {margin:.1f} points")
             
-            # Confidence interval (V3/V4 feature)
-            if simulator_version in ["V3", "V4"]:
+            # Confidence interval (V3 feature)
+            if simulator_version == "Advanced (V3)":
                 st.write(f"95% confidence interval: {confidence_interval[0]:.1f} to {confidence_interval[1]:.1f} points")
             
             # Most common and predicted scores
@@ -359,16 +258,14 @@ def main():
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
         # Team 1 histogram
-        bins1 = range(int(min(team1_scores))-5, int(max(team1_scores))+5)
-        ax1.hist(team1_scores, bins=bins1, color='blue', alpha=0.7)
+        ax1.hist(team1_scores, bins=range(min(team1_scores)-5, max(team1_scores)+5), color='blue', alpha=0.7)
         ax1.axvline(np.mean(team1_scores), color='red', linestyle='dashed', linewidth=2)
         ax1.set_xlabel('Points')
         ax1.set_ylabel('Frequency')
         ax1.set_title(f'{team1} Score Distribution')
         
         # Team 2 histogram
-        bins2 = range(int(min(team2_scores))-5, int(max(team2_scores))+5)
-        ax2.hist(team2_scores, bins=bins2, color='green', alpha=0.7)
+        ax2.hist(team2_scores, bins=range(min(team2_scores)-5, max(team2_scores)+5), color='green', alpha=0.7)
         ax2.axvline(np.mean(team2_scores), color='red', linestyle='dashed', linewidth=2)
         ax2.set_xlabel('Points')
         ax2.set_ylabel('Frequency')
@@ -377,58 +274,11 @@ def main():
         plt.tight_layout()
         st.pyplot(fig)
         
-        # Add download link for the histogram
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{team1}_vs_{team2}_{timestamp}.png"
-        st.markdown(get_image_download_link(fig, filename, "histogram"), unsafe_allow_html=True)
-        
-        # Add a divider
-        st.markdown("---")
-        
-        # Additional insights section
-        st.subheader("Additional Insights")
-        
-        # Create columns for additional insights
-        insight_col1, insight_col2 = st.columns(2)
-        
-        with insight_col1:
-            # Score breakdown
-            st.write("**Score Breakdown:**")
-            st.write(f"Highest {team1} score: {max(team1_scores):.1f}")
-            st.write(f"Lowest {team1} score: {min(team1_scores):.1f}")
-            st.write(f"Highest {team2} score: {max(team2_scores):.1f}")
-            st.write(f"Lowest {team2} score: {min(team2_scores):.1f}")
-            
-            # Blowout percentage
-            blowout_threshold = 15
-            team1_blowouts = sum(1 for margin in team1_margins if margin > blowout_threshold)
-            team2_blowouts = sum(1 for margin in team1_margins if margin < -blowout_threshold)
-            st.write(f"**Blowout Chance (15+ point margin):**")
-            st.write(f"{team1} blowout: {team1_blowouts/num_simulations*100:.1f}%")
-            st.write(f"{team2} blowout: {team2_blowouts/num_simulations*100:.1f}%")
-        
-        with insight_col2:
-            # Close game percentage
-            close_threshold = 5
-            close_games = sum(1 for margin in team1_margins if abs(margin) <= close_threshold)
-            st.write(f"**Close Game Chance (margin ≤ 5 points):**")
-            st.write(f"{close_games/num_simulations*100:.1f}%")
-            
-            # Overtime chance
-            st.write(f"**Overtime Chance:**")
-            st.write(f"{overtime_games/num_simulations*100:.1f}%")
-            
-            # Team form if available in V3/V4
-            if simulator_version in ["V3", "V4"] and hasattr(simulator, 'get_team_form'):
-                try:
-                    team1_form = simulator.get_team_form(team1)
-                    team2_form = simulator.get_team_form(team2)
-                    st.write("**Team Form:**")
-                    st.write(f"{team1}: {team1_form}")
-                    st.write(f"{team2}: {team2_form}")
-                except Exception:
-                    pass
+        # Provide download link using in-memory buffer instead of file
+        st.markdown(get_image_download_link(fig, 
+                                          f"{team1}_vs_{team2}.png", 
+                                          "Histogram"), 
+                  unsafe_allow_html=True)
 
-# Run the main function
 if __name__ == "__main__":
-    main()
+    main() 
