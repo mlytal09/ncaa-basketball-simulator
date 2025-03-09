@@ -44,7 +44,12 @@ class SimpleSimulator:
         
     def load_team_stats(self, df):
         self.team_stats = df
-        if 'Team' in df.columns:
+        # Check if team_name column exists, otherwise try Team
+        if 'team_name' in df.columns:
+            self.team_names = df['team_name'].tolist()
+            # Rename to Team for consistency
+            df.rename(columns={'team_name': 'Team'}, inplace=True)
+        elif 'Team' in df.columns:
             self.team_names = df['Team'].tolist()
         
     def is_rivalry_game(self, team1, team2):
@@ -155,7 +160,7 @@ def main():
             st.sidebar.error(f"Failed to load team stats: HTTP {response.status_code}")
             # Create a minimal dataset for demonstration
             team_stats_df = pd.DataFrame({
-                'Team': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
+                'team_name': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
                 'Conference': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
                 'AdjO': [118.9, 124.2, 123.5, 120.1, 117.8],
                 'AdjD': [89.5, 94.1, 88.2, 85.6, 88.1],
@@ -166,7 +171,7 @@ def main():
         st.sidebar.error(f"Error loading team stats: {str(e)}")
         # Create a minimal dataset for demonstration
         team_stats_df = pd.DataFrame({
-            'Team': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
+            'team_name': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
             'Conference': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
             'AdjO': [118.9, 124.2, 123.5, 120.1, 117.8],
             'AdjD': [89.5, 94.1, 88.2, 85.6, 88.1],
@@ -207,7 +212,7 @@ def main():
         ) == "Neutral Court"
         
         # Get team options directly from the loaded DataFrame
-        team_options = sorted(team_stats_df['Team'].tolist())
+        team_options = sorted(simulator.team_names)
         st.info(f"Using {len(team_options)} teams from team_stats.csv")
         
         if neutral_court:
