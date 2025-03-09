@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from ncaa_simv4 import NcaaGameSimulatorV3
 import os
@@ -21,9 +22,17 @@ This simulator accounts for team strength, home court advantage, rivalries, and 
 # Initialize the simulator
 @st.cache_resource
 def load_simulator():
-    return NcaaGameSimulatorV3()
+    simulator = NcaaGameSimulatorV3()
+    # Ensure the stats directory exists
+    os.makedirs("stats", exist_ok=True)
+    return simulator
 
-simulator = load_simulator()
+try:
+    simulator = load_simulator()
+except Exception as e:
+    st.error(f"Error loading simulator: {str(e)}")
+    st.error("Please ensure the team_stats.csv file is present in the stats directory.")
+    st.stop()
 
 # Create main columns
 col1, col2 = st.columns(2)
@@ -56,6 +65,11 @@ if st.button("Run Simulation"):
             team1_name, team2_name = team1, team2
         else:
             team1_name, team2_name = home_team, away_team
+
+        # Check if teams are entered
+        if not team1_name or not team2_name:
+            st.error("Please enter both team names.")
+            st.stop()
 
         # Validate teams exist
         if not simulator.check_team_exists(team1_name):
@@ -114,6 +128,10 @@ if st.button("Run Simulation"):
         team1_std = np.std(team1_scores)
         team2_std = np.std(team2_scores)
 
+        # Clear progress bar and status
+        progress_bar.empty()
+        status_text.empty()
+
         # Display results
         st.subheader("Simulation Results")
 
@@ -153,7 +171,7 @@ if st.button("Run Simulation"):
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
             # Team 1 histogram
-            ax1.hist(team1_scores, bins=range(min(team1_scores)-5, max(team1_scores)+5),
+            ax1.hist(team1_scores, bins=range(int(min(team1_scores))-5, int(max(team1_scores))+5),
                     color='blue', alpha=0.7)
             ax1.axvline(np.mean(team1_scores), color='red', linestyle='dashed', linewidth=2)
             ax1.set_xlabel('Points')
@@ -161,7 +179,7 @@ if st.button("Run Simulation"):
             ax1.set_title(f'{team1_name} Score Distribution')
 
             # Team 2 histogram
-            ax2.hist(team2_scores, bins=range(min(team2_scores)-5, max(team2_scores)+5),
+            ax2.hist(team2_scores, bins=range(int(min(team2_scores))-5, int(max(team2_scores))+5),
                     color='green', alpha=0.7)
             ax2.axvline(np.mean(team2_scores), color='red', linestyle='dashed', linewidth=2)
             ax2.set_xlabel('Points')
@@ -173,6 +191,8 @@ if st.button("Run Simulation"):
 
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
 
 # Footer
 st.markdown("---")
