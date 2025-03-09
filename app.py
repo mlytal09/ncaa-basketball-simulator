@@ -60,38 +60,107 @@ class SimpleSimulator:
         return False
         
     def simulate_game(self, team1, team2, neutral_court=False, version="V2"):
-        """Simple simulation logic"""
+        """Simulation logic with different behavior for different versions"""
         try:
             # Get team stats
-            team1_row = self.team_stats[self.team_stats['Team'] == team1].iloc[0]
-            team2_row = self.team_stats[self.team_stats['Team'] == team2].iloc[0]
+            team1_row = self.team_stats[self.team_stats['Team'] == team1]
+            team2_row = self.team_stats[self.team_stats['Team'] == team2]
+            
+            if team1_row.empty or team2_row.empty:
+                st.warning(f"Team data not found for {team1 if team1_row.empty else team2}")
+                # Return fallback values with some randomness
+                base1 = 70 + np.random.randint(-10, 10)
+                base2 = 65 + np.random.randint(-10, 10)
+                return base1, base2, False
+                
+            team1_row = team1_row.iloc[0]
+            team2_row = team2_row.iloc[0]
             
             # Use offensive and defensive ratings if available
             team1_off = float(team1_row.get('AdjO', 100))
             team2_off = float(team2_row.get('AdjO', 100))
             team1_def = float(team1_row.get('AdjD', 100))
-            team2_def = float(team1_row.get('AdjD', 100))
+            team2_def = float(team2_row.get('AdjD', 100))
             
             # Tempo impacts total points
             tempo = (float(team1_row.get('Tempo', 70)) + float(team2_row.get('Tempo', 70))) / 2
             
             # Home court advantage
             if not neutral_court:
-                team1_off *= 1.03  # 3% boost
-                team2_def *= 0.97  # 3% worse
+                if version == "V2":
+                    team1_off *= 1.03  # 3% boost
+                    team2_def *= 0.97  # 3% worse
+                elif version == "V3":
+                    team1_off *= 1.04  # 4% boost
+                    team2_def *= 0.96  # 4% worse
+                else:  # V4
+                    team1_off *= 1.05  # 5% boost
+                    team2_def *= 0.95  # 5% worse
             
             # Rivalry game adjustment
             if self.is_rivalry_game(team1, team2):
-                # Make games closer in rivalry games
-                team1_off = team1_off * 0.9 + team2_off * 0.1
-                team2_off = team2_off * 0.9 + team1_off * 0.1
+                if version == "V2":
+                    # Make games closer in rivalry games
+                    team1_off = team1_off * 0.9 + team2_off * 0.1
+                    team2_off = team2_off * 0.9 + team1_off * 0.1
+                elif version == "V3":
+                    # More dramatic effect in V3
+                    team1_off = team1_off * 0.85 + team2_off * 0.15
+                    team2_off = team2_off * 0.85 + team1_off * 0.15
+                    # Add more variance
+                    team1_off *= np.random.uniform(0.95, 1.05)
+                    team2_off *= np.random.uniform(0.95, 1.05)
+                else:  # V4
+                    # Even more dramatic in V4
+                    team1_off = team1_off * 0.8 + team2_off * 0.2
+                    team2_off = team2_off * 0.8 + team1_off * 0.2
+                    # Add even more variance
+                    team1_off *= np.random.uniform(0.93, 1.07)
+                    team2_off *= np.random.uniform(0.93, 1.07)
             
             # Calculate raw scores
-            team1_raw = team1_off / team2_def * tempo / 2
-            team2_raw = team2_off / team1_def * tempo / 2
+            if version == "V2":
+                team1_raw = team1_off / team2_def * tempo / 2
+                team2_raw = team2_off / team1_def * tempo / 2
+            elif version == "V3":
+                # V3 uses a slightly different formula
+                team1_raw = (team1_off / team2_def) * (tempo / 1.9)
+                team2_raw = (team2_off / team1_def) * (tempo / 1.9)
+                # Add some additional factors
+                team1_raw *= (1 + 0.02 * np.random.randn())
+                team2_raw *= (1 + 0.02 * np.random.randn())
+            else:  # V4
+                # V4 uses an even more complex formula
+                team1_raw = (team1_off / team2_def) * (tempo / 1.85)
+                team2_raw = (team2_off / team1_def) * (tempo / 1.85)
+                # Add conference strength factor
+                conf1 = team1_row.get('Conerence', 'Unknown')
+                conf2 = team2_row.get('Conerence', 'Unknown')
+                conf_boost1 = 1.0
+                conf_boost2 = 1.0
+                
+                # Conference strength adjustments
+                power_conferences = ['B12', 'SEC', 'B10', 'ACC', 'BE']
+                if conf1 in power_conferences:
+                    conf_boost1 = 1.02
+                if conf2 in power_conferences:
+                    conf_boost2 = 1.02
+                    
+                team1_raw *= conf_boost1
+                team2_raw *= conf_boost2
+                
+                # Add some additional factors
+                team1_raw *= (1 + 0.03 * np.random.randn())
+                team2_raw *= (1 + 0.03 * np.random.randn())
             
             # Add variability (more for V3/V4)
-            std_dev = 6 if version == "V2" else 8
+            if version == "V2":
+                std_dev = 6
+            elif version == "V3":
+                std_dev = 8
+            else:  # V4
+                std_dev = 9
+                
             team1_score = int(np.random.normal(team1_raw, std_dev))
             team2_score = int(np.random.normal(team2_raw, std_dev))
             
@@ -100,13 +169,28 @@ class SimpleSimulator:
             team2_score = max(50, min(110, team2_score))
             
             # For V3/V4 compatibility, add overtime flag
-            is_overtime = abs(team1_score - team2_score) <= 3 and np.random.random() < 0.05
+            if version == "V2":
+                is_overtime = abs(team1_score - team2_score) <= 3 and np.random.random() < 0.05
+            elif version == "V3":
+                is_overtime = abs(team1_score - team2_score) <= 4 and np.random.random() < 0.07
+            else:  # V4
+                is_overtime = abs(team1_score - team2_score) <= 5 and np.random.random() < 0.09
+            
+            # Adjust scores for overtime
+            if is_overtime:
+                # Add overtime points
+                ot_points1 = np.random.randint(5, 12)
+                ot_points2 = np.random.randint(5, 12)
+                team1_score += ot_points1
+                team2_score += ot_points2
             
             return team1_score, team2_score, is_overtime
         except Exception as e:
             st.error(f"Error in simulation: {str(e)}")
-            # Return fallback values
-            return 75, 70, False
+            # Return fallback values with some randomness
+            base1 = 70 + np.random.randint(-10, 10)
+            base2 = 65 + np.random.randint(-10, 10)
+            return base1, base2, False
 
 def main():
     # Add a title and description
@@ -161,7 +245,7 @@ def main():
             # Create a minimal dataset for demonstration
             team_stats_df = pd.DataFrame({
                 'team_name': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
-                'Conference': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
+                'Conerence': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
                 'AdjO': [118.9, 124.2, 123.5, 120.1, 117.8],
                 'AdjD': [89.5, 94.1, 88.2, 85.6, 88.1],
                 'Tempo': [73.2, 72.8, 69.8, 65.2, 67.7]
@@ -172,7 +256,7 @@ def main():
         # Create a minimal dataset for demonstration
         team_stats_df = pd.DataFrame({
             'team_name': ['Alabama', 'Gonzaga', 'Baylor', 'Houston', 'Michigan'],
-            'Conference': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
+            'Conerence': ['SEC', 'WCC', 'Big 12', 'American', 'Big Ten'],
             'AdjO': [118.9, 124.2, 123.5, 120.1, 117.8],
             'AdjD': [89.5, 94.1, 88.2, 85.6, 88.1],
             'Tempo': [73.2, 72.8, 69.8, 65.2, 67.7]
@@ -276,6 +360,14 @@ def main():
             # Create a progress bar for simulations
             sim_progress = st.progress(0)
             
+            # Get the version code
+            if simulator_version == "Standard (V2)":
+                version_code = "V2"
+            elif simulator_version == "Advanced (V3)":
+                version_code = "V3"
+            else:
+                version_code = "V4"
+            
             for i in range(num_simulations):
                 # Update progress every 5% of simulations
                 if i % max(1, num_simulations // 20) == 0:
@@ -283,8 +375,6 @@ def main():
                 
                 # Run simulation
                 try:
-                    # Pass the version to the simulator
-                    version_code = simulator_version.split(" ")[0][0] + simulator_version.split(" ")[1][1:-1]
                     score1, score2, is_overtime = simulator.simulate_game(
                         team1, team2, neutral_court, version=version_code
                     )
