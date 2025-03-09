@@ -2,8 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from ncaa_simv4 import NcaaGameSimulatorV3
 import os
+import importlib.util
+import sys
+from pathlib import Path
 
 # Set page config
 st.set_page_config(
@@ -19,22 +21,75 @@ Simulate NCAA basketball games using advanced analytics and team statistics.
 This simulator accounts for team strength, home court advantage, rivalries, and more!
 """)
 
-# Initialize the simulator
+# Function to load a module from file path
+def load_module_from_path(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+# Function to initialize the simulator based on version
 @st.cache_resource
-def load_simulator():
-    simulator = NcaaGameSimulatorV3()
+def load_simulator(version):
+    # Map version names to file paths and class names
+    version_map = {
+        "Version 2": {
+            "file": "ncaa_simv2.py",
+            "class": "NcaaGameSimulatorV2"
+        },
+        "Version 3": {
+            "file": "ncaa_simv3.py",
+            "class": "NcaaGameSimulatorV3"
+        },
+        "Version 4": {
+            "file": "ncaa_simv4.py",
+            "class": "NcaaGameSimulatorV3"  # Note: V4 still uses V3 class name
+        }
+    }
+    
     # Ensure the stats directory exists
     os.makedirs("stats", exist_ok=True)
-    return simulator
+    
+    try:
+        # Load the module
+        file_path = version_map[version]["file"]
+        module_name = file_path.replace(".py", "")
+        module = load_module_from_path(module_name, file_path)
+        
+        # Get the simulator class and instantiate it
+        simulator_class = getattr(module, version_map[version]["class"])
+        return simulator_class()
+    except Exception as e:
+        st.error(f"Error loading simulator: {str(e)}")
+        st.error("Please ensure the simulator file and team_stats.csv file are present.")
+        return None
 
-try:
-    simulator = load_simulator()
-except Exception as e:
-    st.error(f"Error loading simulator: {str(e)}")
-    st.error("Please ensure the team_stats.csv file is present in the stats directory.")
+# Sidebar for version selection
+st.sidebar.header("Simulator Settings")
+simulator_version = st.sidebar.selectbox(
+    "Select Simulator Version",
+    ["Version 2", "Version 3", "Version 4"],
+    index=2  # Default to Version 4
+)
+
+# Load the selected simulator
+simulator = load_simulator(simulator_version)
+
+if simulator is None:
     st.stop()
 
-# Create main columns
+# Load team names for dropdowns
+@st.cache_data
+def get_team_names(simulator):
+    try:
+        return sorted(simulator.team_stats.index.tolist())
+    except:
+        return []
+
+team_names = get_team_names(simulator)
+
+# Main content area
 col1, col2 = st.columns(2)
 
 with col1:
@@ -43,19 +98,25 @@ with col1:
     neutral_court = st.checkbox("Neutral Court Game")
     
     if not neutral_court:
-        home_team = st.text_input("Home Team")
-        away_team = st.text_input("Away Team")
+        home_team = st.selectbox("Home Team", team_names, index=0)
+        away_team = st.selectbox("Away Team", team_names, index=1 if len(team_names) > 1 else 0)
     else:
-        team1 = st.text_input("Team 1")
-        team2 = st.text_input("Team 2")
+        team1 = st.selectbox("Team 1", team_names, index=0)
+        team2 = st.selectbox("Team 2", team_names, index=1 if len(team_names) > 1 else 0)
 
-    num_simulations = st.slider("Number of Simulations", 1000, 100000, 50000, 1000)
+    num_simulations = st.slider("Number of Simulations", 1000, 100000, 10000, 1000)
 
 with col2:
     # Advanced settings
     st.subheader("Advanced Settings")
     show_histogram = st.checkbox("Show Score Distribution", value=True)
     show_details = st.checkbox("Show Detailed Statistics", value=True)
+    
+    # Version-specific features
+    if simulator_version in ["Version 3", "Version 4"]:
+        st.info(f"Using {simulator_version} with enhanced features including team form tracking and clutch performance metrics.")
+    else:
+        st.info("Using basic simulation model. Upgrade to Version 3 or 4 for enhanced features.")
 
 # Simulate button
 if st.button("Run Simulation"):
@@ -66,30 +127,9 @@ if st.button("Run Simulation"):
         else:
             team1_name, team2_name = home_team, away_team
 
-        # Check if teams are entered
-        if not team1_name or not team2_name:
-            st.error("Please enter both team names.")
-            st.stop()
-
-        # Convert team names to lowercase for checking
-        team1_lower = team1_name.lower()
-        team2_lower = team2_name.lower()
-
-        # Validate teams exist using team_stats index
-        if team1_lower not in simulator.team_stats.index:
-            similar_teams = simulator.find_similar_teams(team1_name)
-            if similar_teams:
-                st.warning(f"Team '{team1_name}' not found. Did you mean one of these? {', '.join(similar_teams)}")
-            else:
-                st.error(f"Team '{team1_name}' not found.")
-            st.stop()
-
-        if team2_lower not in simulator.team_stats.index:
-            similar_teams = simulator.find_similar_teams(team2_name)
-            if similar_teams:
-                st.warning(f"Team '{team2_name}' not found. Did you mean one of these? {', '.join(similar_teams)}")
-            else:
-                st.error(f"Team '{team2_name}' not found.")
+        # Check if teams are the same
+        if team1_name == team2_name:
+            st.error("Please select different teams for the simulation.")
             st.stop()
 
         # Progress bar
@@ -143,8 +183,9 @@ if st.button("Run Simulation"):
         res_col1, res_col2, res_col3 = st.columns(3)
 
         with res_col1:
-            st.metric("Win Probability", f"{max(team1_win_pct, team2_win_pct):.1f}%",
-                     f"{team1_name if team1_win_pct > team2_win_pct else team2_name}")
+            winner = team1_name if team1_win_pct > team2_win_pct else team2_name
+            win_pct = max(team1_win_pct, team2_win_pct)
+            st.metric("Win Probability", f"{win_pct:.1f}%", f"{winner}")
 
         with res_col2:
             st.metric("Predicted Score", 
@@ -162,11 +203,25 @@ if st.button("Run Simulation"):
                 st.write(f"**{team1_name} Statistics:**")
                 st.write(f"Average Score: {team1_avg:.1f} ± {team1_std:.1f}")
                 st.write(f"Win Percentage: {team1_win_pct:.1f}%")
+                
+                # Add team strength if available
+                try:
+                    team1_strength = simulator.calculate_team_strength(simulator.team_stats.loc[team1_name.lower()])
+                    st.write(f"Team Strength: {team1_strength:.2f}")
+                except:
+                    pass
 
             with stats_col2:
                 st.write(f"**{team2_name} Statistics:**")
                 st.write(f"Average Score: {team2_avg:.1f} ± {team2_std:.1f}")
                 st.write(f"Win Percentage: {team2_win_pct:.1f}%")
+                
+                # Add team strength if available
+                try:
+                    team2_strength = simulator.calculate_team_strength(simulator.team_stats.loc[team2_name.lower()])
+                    st.write(f"Team Strength: {team2_strength:.2f}")
+                except:
+                    pass
 
         if show_histogram:
             st.subheader("Score Distribution")
@@ -203,6 +258,25 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
     <p>Created with ❤️ by NCAA Basketball Game Simulator</p>
-    <p>Data source: Team statistics from various sources</p>
+    <p>Data source: Team statistics from KenPom and other sources</p>
 </div>
 """, unsafe_allow_html=True)
+
+# Version information in sidebar
+st.sidebar.markdown("---")
+st.sidebar.subheader("Version Information")
+st.sidebar.markdown("""
+- **Version 2**: Basic simulation model
+- **Version 3**: Enhanced with team form tracking and clutch performance
+- **Version 4**: Further improvements with better tempo control and reduced regression to the mean
+""")
+
+# Help section in sidebar
+st.sidebar.markdown("---")
+st.sidebar.subheader("Help")
+st.sidebar.markdown("""
+1. Select a simulator version
+2. Choose teams to simulate
+3. Adjust simulation settings
+4. Click "Run Simulation"
+""")
