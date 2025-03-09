@@ -38,7 +38,7 @@ def get_simulator(version):
             from ncaa_simv3 import NcaaGameSimulatorV3
             return NcaaGameSimulatorV3()
         elif version == "V4":
-            from ncaa_simv4 import NcaaGameSimulatorV3 as NcaaGameSimulatorV4
+            from ncaa_simv4 import NcaaGameSimulatorV4
             return NcaaGameSimulatorV4()
         else:
             st.error(f"Unknown simulator version: {version}")
