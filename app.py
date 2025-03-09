@@ -95,17 +95,19 @@ def main():
         ) == "Neutral Court"
         
         # Get team options based on the simulator's team_stats index
-        # For V3 and V4, the team_stats is indexed by lowercase team names
-        if simulator_version in ["Advanced (V3)", "Premium (V4)"]:
-            # Convert index to original case if needed
+        # For V3 and V4, use the team_names list
+        if simulator_version in ["Advanced (V3)", "Premium (V4)"] and hasattr(simulator, 'team_names'):
+            team_options = sorted(simulator.team_names)
+        # For V2, use the index directly
+        elif simulator_version == "Standard (V2)":
+            team_options = sorted(list(simulator.team_stats.index))
+        else:
+            # Fallback to using the DataFrame
             if 'Team' in simulator.team_stats.columns:
                 team_options = sorted(list(simulator.team_stats['Team'].unique()))
             else:
-                # Fall back to index if Team column not available
+                # Last resort: use the index
                 team_options = sorted(list(simulator.team_stats.index))
-        else:
-            # For V2, use the index directly
-            team_options = sorted(list(simulator.team_stats.index))
         
         if neutral_court:
             # Neutral court game
