@@ -58,6 +58,14 @@ class SimpleSimulator:
             if (team1 in rival1 and team2 in rival2) or (team2 in rival1 and team1 in rival2):
                 return True
         return False
+    
+    def get_default_stats(self):
+        """Return default stats for teams not found in the dataset"""
+        return {
+            'AdjO': 100.0,
+            'AdjD': 100.0,
+            'Tempo': 68.0
+        }
         
     def simulate_game(self, team1, team2, neutral_court=False, version="V2"):
         """Simulation logic with different behavior for different versions"""
@@ -66,24 +74,29 @@ class SimpleSimulator:
             team1_row = self.team_stats[self.team_stats['Team'] == team1]
             team2_row = self.team_stats[self.team_stats['Team'] == team2]
             
-            if team1_row.empty or team2_row.empty:
-                st.warning(f"Team data not found for {team1 if team1_row.empty else team2}")
-                # Return fallback values with some randomness
-                base1 = 70 + np.random.randint(-10, 10)
-                base2 = 65 + np.random.randint(-10, 10)
-                return base1, base2, False
+            # Use default stats if teams not found
+            if team1_row.empty:
+                st.warning(f"Team data not found for {team1}, using default values")
+                team1_stats = self.get_default_stats()
+            else:
+                team1_stats = team1_row.iloc[0].to_dict()
                 
-            team1_row = team1_row.iloc[0]
-            team2_row = team2_row.iloc[0]
+            if team2_row.empty:
+                st.warning(f"Team data not found for {team2}, using default values")
+                team2_stats = self.get_default_stats()
+            else:
+                team2_stats = team2_row.iloc[0].to_dict()
             
-            # Use offensive and defensive ratings if available
-            team1_off = float(team1_row.get('AdjO', 100))
-            team2_off = float(team2_row.get('AdjO', 100))
-            team1_def = float(team1_row.get('AdjD', 100))
-            team2_def = float(team2_row.get('AdjD', 100))
+            # Use offensive and defensive ratings
+            team1_off = float(team1_stats.get('AdjO', 100.0))
+            team2_off = float(team2_stats.get('AdjO', 100.0))
+            team1_def = float(team1_stats.get('AdjD', 100.0))
+            team2_def = float(team2_stats.get('AdjD', 100.0))
             
             # Tempo impacts total points
-            tempo = (float(team1_row.get('Tempo', 70)) + float(team2_row.get('Tempo', 70))) / 2
+            tempo1 = float(team1_stats.get('Tempo', 68.0))
+            tempo2 = float(team2_stats.get('Tempo', 68.0))
+            tempo = (tempo1 + tempo2) / 2
             
             # Home court advantage
             if not neutral_court:
@@ -118,33 +131,35 @@ class SimpleSimulator:
                     team1_off *= np.random.uniform(0.93, 1.07)
                     team2_off *= np.random.uniform(0.93, 1.07)
             
-            # Calculate raw scores
+            # Base calculation for expected points
+            # Points = (Offensive Rating / Defensive Rating) * (Tempo / 2)
+            # This gives each team's expected points in a game
+            
+            # Calculate raw scores based on version
             if version == "V2":
-                team1_raw = team1_off / team2_def * tempo / 2
-                team2_raw = team2_off / team1_def * tempo / 2
+                base_factor = 0.5  # Standard divisor
+                team1_raw = (team1_off / team2_def) * (tempo * base_factor)
+                team2_raw = (team2_off / team1_def) * (tempo * base_factor)
             elif version == "V3":
-                # V3 uses a slightly different formula
-                team1_raw = (team1_off / team2_def) * (tempo / 1.9)
-                team2_raw = (team2_off / team1_def) * (tempo / 1.9)
+                base_factor = 0.525  # Slightly higher scores
+                team1_raw = (team1_off / team2_def) * (tempo * base_factor)
+                team2_raw = (team2_off / team1_def) * (tempo * base_factor)
                 # Add some additional factors
                 team1_raw *= (1 + 0.02 * np.random.randn())
                 team2_raw *= (1 + 0.02 * np.random.randn())
             else:  # V4
-                # V4 uses an even more complex formula
-                team1_raw = (team1_off / team2_def) * (tempo / 1.85)
-                team2_raw = (team2_off / team1_def) * (tempo / 1.85)
+                base_factor = 0.55  # Even higher scores
+                team1_raw = (team1_off / team2_def) * (tempo * base_factor)
+                team2_raw = (team2_off / team1_def) * (tempo * base_factor)
+                
                 # Add conference strength factor
-                conf1 = team1_row.get('Conerence', 'Unknown')
-                conf2 = team2_row.get('Conerence', 'Unknown')
-                conf_boost1 = 1.0
-                conf_boost2 = 1.0
+                conf1 = team1_stats.get('Conerence', 'Unknown')
+                conf2 = team2_stats.get('Conerence', 'Unknown')
                 
                 # Conference strength adjustments
                 power_conferences = ['B12', 'SEC', 'B10', 'ACC', 'BE']
-                if conf1 in power_conferences:
-                    conf_boost1 = 1.02
-                if conf2 in power_conferences:
-                    conf_boost2 = 1.02
+                conf_boost1 = 1.02 if conf1 in power_conferences else 1.0
+                conf_boost2 = 1.02 if conf2 in power_conferences else 1.0
                     
                 team1_raw *= conf_boost1
                 team2_raw *= conf_boost2
@@ -164,7 +179,7 @@ class SimpleSimulator:
             team1_score = int(np.random.normal(team1_raw, std_dev))
             team2_score = int(np.random.normal(team2_raw, std_dev))
             
-            # Ensure reasonable scores
+            # Ensure reasonable scores (minimum 50, maximum 110)
             team1_score = max(50, min(110, team1_score))
             team2_score = max(50, min(110, team2_score))
             
@@ -183,6 +198,13 @@ class SimpleSimulator:
                 ot_points2 = np.random.randint(5, 12)
                 team1_score += ot_points1
                 team2_score += ot_points2
+                
+                # Ensure one team wins in overtime
+                if team1_score == team2_score:
+                    if np.random.random() < 0.5:
+                        team1_score += 1
+                    else:
+                        team2_score += 1
             
             return team1_score, team2_score, is_overtime
         except Exception as e:
@@ -273,10 +295,13 @@ def main():
         
         if simulator_version == "Standard (V2)":
             st.sidebar.info("Using Standard simulator (V2)")
+            version_code = "V2"
         elif simulator_version == "Advanced (V3)":
             st.sidebar.info("Using Advanced simulator (V3) with improved accuracy")
+            version_code = "V3"
         else:
             st.sidebar.info("Using Premium simulator (V4) with latest enhancements")
+            version_code = "V4"
     except Exception as e:
         st.error(f"Error initializing simulator: {str(e)}")
         st.stop()
@@ -359,14 +384,6 @@ def main():
             
             # Create a progress bar for simulations
             sim_progress = st.progress(0)
-            
-            # Get the version code
-            if simulator_version == "Standard (V2)":
-                version_code = "V2"
-            elif simulator_version == "Advanced (V3)":
-                version_code = "V3"
-            else:
-                version_code = "V4"
             
             for i in range(num_simulations):
                 # Update progress every 5% of simulations
