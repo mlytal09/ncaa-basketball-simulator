@@ -8,17 +8,7 @@ from datetime import datetime
 import time
 import base64
 from io import BytesIO
-
-# Import simulator classes
-try:
-    from ncaa_simv2 import NcaaGameSimulatorV2
-    from ncaa_simv3 import NcaaGameSimulatorV3
-    from ncaa_simv4 import NcaaGameSimulatorV3 as NcaaGameSimulatorV4
-    AVAILABLE_VERSIONS = ["V2", "V3", "V4"]
-except ImportError as e:
-    st.error(f"Error importing simulator classes: {e}")
-    st.error("Please ensure all simulator files are in the correct location.")
-    AVAILABLE_VERSIONS = []
+import traceback
 
 # Set page configuration
 st.set_page_config(
@@ -42,30 +32,65 @@ def get_simulator(version):
     """Initialize and return the appropriate simulator version"""
     try:
         if version == "V2":
+            from ncaa_simv2 import NcaaGameSimulatorV2
             return NcaaGameSimulatorV2()
         elif version == "V3":
+            from ncaa_simv3 import NcaaGameSimulatorV3
             return NcaaGameSimulatorV3()
         elif version == "V4":
+            from ncaa_simv4 import NcaaGameSimulatorV3 as NcaaGameSimulatorV4
             return NcaaGameSimulatorV4()
         else:
             st.error(f"Unknown simulator version: {version}")
             return None
     except Exception as e:
-        st.error(f"Error initializing simulator: {e}")
+        st.error(f"Error initializing simulator: {str(e)}")
+        st.error(traceback.format_exc())
         return None
 
 # Get team names from simulator
 def get_team_names(simulator_instance):
     """Get sorted list of team names from simulator"""
-    if simulator_instance is None or not hasattr(simulator_instance, 'team_stats'):
+    if simulator_instance is None:
         return []
     
     try:
-        # Convert index to list for safety
-        return sorted([str(name) for name in simulator_instance.team_stats.index.tolist()])
+        if not hasattr(simulator_instance, 'team_stats'):
+            return []
+            
+        # Handle different index types safely
+        if isinstance(simulator_instance.team_stats.index, pd.Index):
+            # Convert all index values to strings
+            return sorted([str(name) for name in simulator_instance.team_stats.index.tolist()])
+        else:
+            return []
     except Exception as e:
-        st.error(f"Error getting team names: {e}")
+        st.error(f"Error getting team names: {str(e)}")
+        st.error(traceback.format_exc())
         return []
+
+# Check available simulator versions
+def get_available_versions():
+    versions = []
+    try:
+        import ncaa_simv2
+        versions.append("V2")
+    except ImportError:
+        pass
+    
+    try:
+        import ncaa_simv3
+        versions.append("V3")
+    except ImportError:
+        pass
+    
+    try:
+        import ncaa_simv4
+        versions.append("V4")
+    except ImportError:
+        pass
+    
+    return versions
 
 # Main function
 def main():
@@ -77,6 +102,12 @@ def main():
     
     Data is loaded from team_stats.csv which includes team statistics and conference information.
     """)
+    
+    # Get available versions
+    AVAILABLE_VERSIONS = get_available_versions()
+    if not AVAILABLE_VERSIONS:
+        st.error("No simulator versions found. Please check that the simulator files are in the correct location.")
+        return
     
     # Create sidebar for simulation settings
     st.sidebar.header("Simulation Settings")
@@ -111,6 +142,15 @@ def main():
     team_names = get_team_names(simulator)
     if not team_names:
         st.error("No team data available. Please check that team_stats.csv is properly formatted and located in the stats directory.")
+        
+        # Debug information
+        st.error("Debug information:")
+        if hasattr(simulator, 'team_stats'):
+            st.error(f"team_stats type: {type(simulator.team_stats)}")
+            st.error(f"team_stats index type: {type(simulator.team_stats.index)}")
+            st.error(f"team_stats columns: {simulator.team_stats.columns.tolist()}")
+        else:
+            st.error("simulator does not have team_stats attribute")
         return
     
     # Number of simulations slider
@@ -204,52 +244,59 @@ def main():
             
             progress_bar = st.progress(0)
             
-            for i in range(num_simulations):
-                try:
-                    # Try the new V3/V4 interface first (returns 3 values)
-                    score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
-                    if is_overtime:
-                        overtime_games += 1
-                except ValueError:
-                    # Fall back to old interface (returns 2 values)
-                    score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
-                except Exception as e:
-                    st.error(f"Error during simulation: {e}")
-                    break
+            try:
+                for i in range(num_simulations):
+                    try:
+                        # Try the new V3/V4 interface first (returns 3 values)
+                        score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
+                        if is_overtime:
+                            overtime_games += 1
+                    except ValueError:
+                        # Fall back to old interface (returns 2 values)
+                        score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
+                    except Exception as e:
+                        st.error(f"Error during simulation: {e}")
+                        st.error(traceback.format_exc())
+                        break
+                    
+                    team1_scores.append(score1)
+                    team2_scores.append(score2)
+                    team1_margins.append(score1 - score2)
+                    
+                    if score1 > score2:
+                        team1_wins += 1
+                    elif score2 > score1:
+                        team2_wins += 1
+                    
+                    # Update progress bar every 5% of simulations
+                    if i % max(1, num_simulations // 20) == 0:
+                        progress_bar.progress(i / num_simulations)
                 
-                team1_scores.append(score1)
-                team2_scores.append(score2)
-                team1_margins.append(score1 - score2)
+                # Complete progress bar
+                progress_bar.progress(1.0)
                 
-                if score1 > score2:
-                    team1_wins += 1
-                elif score2 > score1:
-                    team2_wins += 1
+                # Calculate statistics
+                team1_avg = np.mean(team1_scores)
+                team2_avg = np.mean(team2_scores)
+                team1_std = np.std(team1_scores)
+                team2_std = np.std(team2_scores)
+                margin = team1_avg - team2_avg
+                margin_std = np.std(team1_margins)
                 
-                # Update progress bar every 5% of simulations
-                if i % max(1, num_simulations // 20) == 0:
-                    progress_bar.progress(i / num_simulations)
+                # Calculate confidence interval for the margin
+                confidence_interval = stats.norm.interval(0.95, loc=margin, scale=margin_std/np.sqrt(num_simulations))
+                
+                # Find most common score
+                from collections import Counter
+                score_pairs = [(int(team1_scores[i]), int(team2_scores[i])) for i in range(num_simulations)]
+                most_common_score = Counter(score_pairs).most_common(1)[0][0]
+                
+                sim_time = time.time() - start_time
             
-            # Complete progress bar
-            progress_bar.progress(1.0)
-            
-            # Calculate statistics
-            team1_avg = np.mean(team1_scores)
-            team2_avg = np.mean(team2_scores)
-            team1_std = np.std(team1_scores)
-            team2_std = np.std(team2_scores)
-            margin = team1_avg - team2_avg
-            margin_std = np.std(team1_margins)
-            
-            # Calculate confidence interval for the margin
-            confidence_interval = stats.norm.interval(0.95, loc=margin, scale=margin_std/np.sqrt(num_simulations))
-            
-            # Find most common score
-            from collections import Counter
-            score_pairs = [(int(team1_scores[i]), int(team2_scores[i])) for i in range(num_simulations)]
-            most_common_score = Counter(score_pairs).most_common(1)[0][0]
-            
-            sim_time = time.time() - start_time
+            except Exception as e:
+                st.error(f"Error during simulation calculations: {e}")
+                st.error(traceback.format_exc())
+                return
         
         # Display results in a nice format
         st.success(f"Simulation completed in {sim_time:.2f} seconds")
