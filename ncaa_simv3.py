@@ -303,8 +303,16 @@ class NcaaGameSimulatorV3:
         # Normalize the statistics
         self.team_stats = self.normalize_team_stats(df)
         
-        # Set the team name as index for faster lookups
-        self.team_stats = self.team_stats.set_index('team_name_lower')
+        # Save original team names before setting index
+        self.team_names = self.team_stats['Team'].tolist()
+        
+        # Set the team name as index for faster lookups, but keep Team column accessible
+        self.team_stats_indexed = self.team_stats.set_index('team_name_lower')
+        
+        # Create a lookup dict for team name to team name lower
+        self.team_name_to_lower = {
+            team: team.lower() for team in self.team_names
+        }
         
         print(f"Successfully loaded stats for {len(self.team_stats)} teams")
         return self.team_stats
@@ -449,16 +457,16 @@ class NcaaGameSimulatorV3:
         if self.team_stats is None:
             self.load_team_stats()
         
-        # Try exact match first
-        if team_name in self.team_stats.index:
+        # Check in team_names list (original case)
+        if team_name in self.team_names:
             return True
         
-        # Try lowercase match
-        if team_name.lower() in self.team_stats.index:
+        # Try lowercase match in indexed dataframe
+        if team_name.lower() in self.team_stats_indexed.index:
             return True
         
         # Try partial match
-        for team in self.team_stats.index:
+        for team in self.team_names:
             if team_name.lower() in team.lower():
                 return True
         
@@ -482,13 +490,13 @@ class NcaaGameSimulatorV3:
         similar_teams = []
         
         # First try direct substring match
-        for team in self.team_stats.index:
+        for team in self.team_names:
             if team_name in team.lower() or team.lower() in team_name:
                 similar_teams.append(team)
         
         # If no direct matches, try fuzzy matching
         if not similar_teams:
-            for team in self.team_stats.index:
+            for team in self.team_names:
                 similarity = difflib.SequenceMatcher(None, team_name, team.lower()).ratio()
                 if similarity >= threshold:
                     similar_teams.append(team)
@@ -554,19 +562,24 @@ class NcaaGameSimulatorV3:
         
         # Also check conference rivals for teams in the same conference
         try:
-            team1_stats = self.team_stats.loc[team1]
-            team2_stats = self.team_stats.loc[team2]
+            # Get team stats by converting to lowercase first
+            team1_lower = team1.lower()
+            team2_lower = team2.lower()
             
-            if 'Conference' in team1_stats and 'Conference' in team2_stats:
-                if team1_stats['Conference'] == team2_stats['Conference']:
-                    # Same conference - calculate chance of being rivals
-                    conference_tier = self.get_conference_tier(team1_stats['Conference'])
-                    # Lower tier conferences have stronger internal rivalries
-                    rivalry_chance = 0.2 - (conference_tier * 0.03)
-                    
-                    # Random chance of being conference rivals
-                    if random.random() < rivalry_chance:
-                        return True
+            if team1_lower in self.team_stats_indexed.index and team2_lower in self.team_stats_indexed.index:
+                team1_stats = self.team_stats_indexed.loc[team1_lower]
+                team2_stats = self.team_stats_indexed.loc[team2_lower]
+                
+                if 'Conference' in team1_stats and 'Conference' in team2_stats:
+                    if team1_stats['Conference'] == team2_stats['Conference']:
+                        # Same conference - calculate chance of being rivals
+                        conference_tier = self.get_conference_tier(team1_stats['Conference'])
+                        # Lower tier conferences have stronger internal rivalries
+                        rivalry_chance = 0.2 - (conference_tier * 0.03)
+                        
+                        # Random chance of being conference rivals
+                        if random.random() < rivalry_chance:
+                            return True
         except:
             # If there's an error accessing team stats, just continue
             pass
@@ -628,51 +641,61 @@ class NcaaGameSimulatorV3:
         # Get team stats
         try:
             # Try to find the team by exact match first
-            if team1.lower() in self.team_stats.index:
-                team1_stats = self.team_stats.loc[team1.lower()]
+            team1_lower = team1.lower()
+            team2_lower = team2.lower()
+            
+            if team1_lower in self.team_stats_indexed.index:
+                team1_stats = self.team_stats_indexed.loc[team1_lower]
             else:
-                # Try to find by the original case
-                team1_stats = self.team_stats.loc[team1]
+                # Try to find by finding a similar team name
+                similar_teams = self.find_similar_teams(team1)
+                if similar_teams:
+                    team1 = similar_teams[0]
+                    team1_lower = team1.lower()
+                    team1_stats = self.team_stats_indexed.loc[team1_lower]
+                else:
+                    raise ValueError(f"Team '{team1}' not found in stats database")
                 
-            if team2.lower() in self.team_stats.index:
-                team2_stats = self.team_stats.loc[team2.lower()]
+            if team2_lower in self.team_stats_indexed.index:
+                team2_stats = self.team_stats_indexed.loc[team2_lower]
             else:
-                # Try to find by the original case
-                team2_stats = self.team_stats.loc[team2]
-        except KeyError:
+                # Try to find by finding a similar team name
+                similar_teams = self.find_similar_teams(team2)
+                if similar_teams:
+                    team2 = similar_teams[0]
+                    team2_lower = team2.lower()
+                    team2_stats = self.team_stats_indexed.loc[team2_lower]
+                else:
+                    raise ValueError(f"Team '{team2}' not found in stats database")
+        except Exception as e:
             # Try to find the team by searching for partial matches
+            print(f"Error finding teams: {e}")
             team1_found = False
             team2_found = False
             
-            for team_name in self.team_stats.index:
-                if team1.lower() in team_name:
+            for team_name in self.team_names:
+                if team1.lower() in team_name.lower():
                     team1 = team_name
                     team1_found = True
                     break
             
-            for team_name in self.team_stats.index:
-                if team2.lower() in team_name:
+            for team_name in self.team_names:
+                if team2.lower() in team_name.lower():
                     team2 = team_name
                     team2_found = True
                     break
             
             if not team1_found:
-                similar_teams = self.find_similar_teams(team1)
-                if similar_teams:
-                    team1 = similar_teams[0]
-                else:
-                    raise ValueError(f"Team '{team1}' not found in stats database")
+                raise ValueError(f"Team '{team1}' not found in stats database")
             
             if not team2_found:
-                similar_teams = self.find_similar_teams(team2)
-                if similar_teams:
-                    team2 = similar_teams[0]
-                else:
-                    raise ValueError(f"Team '{team2}' not found in stats database")
+                raise ValueError(f"Team '{team2}' not found in stats database")
             
             # Try again with the found team names
-            team1_stats = self.team_stats.loc[team1]
-            team2_stats = self.team_stats.loc[team2]
+            team1_lower = team1.lower()
+            team2_lower = team2.lower()
+            team1_stats = self.team_stats_indexed.loc[team1_lower]
+            team2_stats = self.team_stats_indexed.loc[team2_lower]
         
         # Calculate team strengths
         team1_strength = self.calculate_team_strength(team1_stats)
