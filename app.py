@@ -1,14 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import matplotlib.pyplot as plt
 from scipy import stats
 from datetime import datetime
 import time
 import base64
 from io import BytesIO
-import sys
 import requests
 
 # Set page configuration
@@ -27,18 +25,36 @@ def get_image_download_link(fig, filename, text):
     href = f'<a href="data:image/png;base64,{b64}" download="{filename}">Download {text}</a>'
     return href
 
-# Define a simple simulator class that doesn't rely on imports
+# Simple simulator class that doesn't rely on external imports
 class SimpleSimulator:
     def __init__(self):
         self.team_stats = None
         self.team_names = []
+        self.rivalries = [
+            ('Duke', 'North Carolina'),
+            ('Kentucky', 'Louisville'),
+            ('Kansas', 'Kansas St'),
+            ('Indiana', 'Purdue'),
+            ('Michigan', 'Michigan St'),
+            ('UCLA', 'USC'),
+            ('Alabama', 'Auburn'),
+            ('Florida', 'Florida St'),
+            ('Gonzaga', 'Saint Mary\'s')
+        ]
         
     def load_team_stats(self, df):
         self.team_stats = df
         if 'Team' in df.columns:
             self.team_names = df['Team'].tolist()
         
-    def simulate_game(self, team1, team2, neutral_court=False):
+    def is_rivalry_game(self, team1, team2):
+        """Check if two teams are rivals"""
+        for rival1, rival2 in self.rivalries:
+            if (team1 in rival1 and team2 in rival2) or (team2 in rival1 and team1 in rival2):
+                return True
+        return False
+        
+    def simulate_game(self, team1, team2, neutral_court=False, version="V2"):
         """Simple simulation logic"""
         try:
             # Get team stats
@@ -59,13 +75,20 @@ class SimpleSimulator:
                 team1_off *= 1.03  # 3% boost
                 team2_def *= 0.97  # 3% worse
             
+            # Rivalry game adjustment
+            if self.is_rivalry_game(team1, team2):
+                # Make games closer in rivalry games
+                team1_off = team1_off * 0.9 + team2_off * 0.1
+                team2_off = team2_off * 0.9 + team1_off * 0.1
+            
             # Calculate raw scores
             team1_raw = team1_off / team2_def * tempo / 2
             team2_raw = team2_off / team1_def * tempo / 2
             
-            # Add variability
-            team1_score = int(np.random.normal(team1_raw, 6))
-            team2_score = int(np.random.normal(team2_raw, 6))
+            # Add variability (more for V3/V4)
+            std_dev = 6 if version == "V2" else 8
+            team1_score = int(np.random.normal(team1_raw, std_dev))
+            team2_score = int(np.random.normal(team2_raw, std_dev))
             
             # Ensure reasonable scores
             team1_score = max(50, min(110, team1_score))
@@ -224,7 +247,7 @@ def main():
         st.write("")
         
         # Check for rivalry game
-        if team1 in ['Duke', 'North Carolina', 'Kentucky'] and team2 in ['Duke', 'North Carolina', 'Kentucky']:
+        if simulator.is_rivalry_game(team1, team2):
             st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
         
         # Create a button to run simulation
@@ -255,7 +278,11 @@ def main():
                 
                 # Run simulation
                 try:
-                    score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
+                    # Pass the version to the simulator
+                    version_code = simulator_version.split(" ")[0][0] + simulator_version.split(" ")[1][1:-1]
+                    score1, score2, is_overtime = simulator.simulate_game(
+                        team1, team2, neutral_court, version=version_code
+                    )
                     
                     team1_scores.append(score1)
                     team2_scores.append(score2)
