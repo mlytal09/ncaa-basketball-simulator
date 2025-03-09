@@ -95,7 +95,17 @@ def main():
         ) == "Neutral Court"
         
         # Get team options based on the simulator's team_stats index
-        team_options = sorted(list(simulator.team_stats.index))
+        # For V3 and V4, the team_stats is indexed by lowercase team names
+        if simulator_version in ["Advanced (V3)", "Premium (V4)"]:
+            # Convert index to original case if needed
+            if 'Team' in simulator.team_stats.columns:
+                team_options = sorted(list(simulator.team_stats['Team'].unique()))
+            else:
+                # Fall back to index if Team column not available
+                team_options = sorted(list(simulator.team_stats.index))
+        else:
+            # For V2, use the index directly
+            team_options = sorted(list(simulator.team_stats.index))
         
         if neutral_court:
             # Neutral court game
@@ -133,10 +143,14 @@ def main():
         st.write("")
         st.write("")
         
-        # Check for rivalry game if using V3
-        if simulator_version == "Advanced (V3)" and hasattr(simulator, 'is_rivalry_game'):
-            if simulator.is_rivalry_game(team1, team2):
-                st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
+        # Check for rivalry game if using V3 or V4
+        if simulator_version in ["Advanced (V3)", "Premium (V4)"] and hasattr(simulator, 'is_rivalry_game'):
+            try:
+                if simulator.is_rivalry_game(team1, team2):
+                    st.warning(f"⚡ {team1} vs {team2} is a RIVALRY GAME! Expect the unexpected!")
+            except Exception as e:
+                # Just ignore rivalry check errors
+                pass
         
         # Create a button to run simulation
         run_button = st.button("Run Simulation", type="primary")
@@ -151,33 +165,36 @@ def main():
             start_time = time.time()
             team1_wins = 0
             team2_wins = 0
-            ties = 0
+            overtime_games = 0
             team1_scores = []
             team2_scores = []
             team1_margins = []  # Track margins for confidence calculation
-            overtime_games = 0
             
             for _ in range(num_simulations):
                 # Handle different simulator versions
-                if simulator_version == "Standard (V2)":
-                    # V2 returns only two values
-                    score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
-                    is_overtime = False  # V2 doesn't track overtime
-                else:
-                    # V3 and V4 return three values
-                    score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
-                
-                team1_scores.append(score1)
-                team2_scores.append(score2)
-                team1_margins.append(score1 - score2)
-                
-                if score1 > score2:
-                    team1_wins += 1
-                elif score2 > score1:
-                    team2_wins += 1
-                
-                if is_overtime:
-                    overtime_games += 1
+                try:
+                    if simulator_version == "Standard (V2)":
+                        # V2 returns only two values
+                        score1, score2 = simulator.simulate_game(team1, team2, neutral_court)
+                        is_overtime = False  # V2 doesn't track overtime
+                    else:
+                        # V3 and V4 return three values
+                        score1, score2, is_overtime = simulator.simulate_game(team1, team2, neutral_court)
+                    
+                    team1_scores.append(score1)
+                    team2_scores.append(score2)
+                    team1_margins.append(score1 - score2)
+                    
+                    if score1 > score2:
+                        team1_wins += 1
+                    elif score2 > score1:
+                        team2_wins += 1
+                    
+                    if is_overtime:
+                        overtime_games += 1
+                except Exception as e:
+                    st.error(f"Error in simulation: {str(e)}")
+                    st.stop()
             
             # Calculate statistics
             team1_avg = np.mean(team1_scores)
@@ -228,8 +245,8 @@ def main():
             st.write(f"{team2}: {team2_wins/num_simulations*100:.1f}%")
             st.write(f"Chance of Overtime: {overtime_games/num_simulations*100:.1f}%")
             
-            # Confidence rating (V3 feature)
-            if simulator_version == "Advanced (V3)":
+            # Confidence rating (V3/V4 feature)
+            if simulator_version in ["Advanced (V3)", "Premium (V4)"]:
                 confidence_rating = min(5, max(1, int(abs(team1_wins - team2_wins) / (num_simulations * 0.1))))
                 confidence_stars = "★" * confidence_rating + "☆" * (5 - confidence_rating)
                 st.write(f"Prediction Confidence: {confidence_stars}")
@@ -242,8 +259,8 @@ def main():
             st.write(f"{team2}: {team2_avg:.1f} ± {team2_std:.1f}")
             st.write(f"Margin: {margin:.1f} points")
             
-            # Confidence interval (V3 feature)
-            if simulator_version == "Advanced (V3)":
+            # Confidence interval (V3/V4 feature)
+            if simulator_version in ["Advanced (V3)", "Premium (V4)"]:
                 st.write(f"95% confidence interval: {confidence_interval[0]:.1f} to {confidence_interval[1]:.1f} points")
             
             # Most common and predicted scores
