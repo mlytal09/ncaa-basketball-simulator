@@ -309,6 +309,318 @@ class NcaaGameSimulatorV4:
         print(f"Successfully loaded stats for {len(self.team_stats)} teams")
         return self.team_stats
     
+    def normalize_team_stats(self, df):
+        """
+        Normalize team statistics to ensure consistent data format
+        
+        Args:
+            df (DataFrame): The loaded team statistics DataFrame
+            
+        Returns:
+            DataFrame: Normalized team statistics
+        """
+        # Create a copy to avoid modifying the original
+        df_norm = df.copy()
+        
+        # Make sure team names are preserved
+        if 'Team' in df_norm.columns:
+            team_col = 'Team'
+        elif 'team_name' in df_norm.columns:
+            team_col = 'team_name'
+        else:
+            # If no team column, use the first column
+            team_col = df_norm.columns[0]
+            df_norm.rename(columns={team_col: 'Team'}, inplace=True)
+            team_col = 'Team'
+        
+        # Remove any potential duplicate teams
+        df_norm.drop_duplicates(subset=[team_col], keep='first', inplace=True)
+        
+        # Check for essential columns and set defaults if missing
+        essential_stats = [
+            'AdjO', 'AdjD', 'Tempo', 'eFG%', 'TOV%', 'ORB%', 'FTR',
+            'Blk%', 'Stl%', '3PA%', 'A%'
+        ]
+        
+        for stat in essential_stats:
+            if stat not in df_norm.columns:
+                # Use reasonable defaults for missing columns
+                if stat == 'AdjO' or stat == 'AdjD':
+                    df_norm[stat] = 100.0  # Average efficiency
+                elif stat == 'Tempo':
+                    df_norm[stat] = 68.0   # Average tempo
+                elif stat in ['eFG%', 'TOV%', 'ORB%', 'FTR', '3PA%']:
+                    df_norm[stat] = 0.5    # Mid-range value
+                elif stat in ['Blk%', 'Stl%']:
+                    df_norm[stat] = 0.1    # Typical values
+                elif stat == 'A%':
+                    df_norm[stat] = 0.5    # Mid-range value
+                print(f"Created default column for missing stat: {stat}")
+        
+        # Ensure team_name_lower column exists
+        if 'team_name_lower' not in df_norm.columns:
+            df_norm['team_name_lower'] = df_norm[team_col].str.lower()
+        
+        # Convert percentage strings to floats if needed
+        for col in df_norm.columns:
+            if col != team_col and col != 'team_name_lower' and col != 'Conference':
+                # Try to convert to numeric, errors='coerce' will convert failures to NaN
+                df_norm[col] = pd.to_numeric(df_norm[col], errors='coerce')
+                
+                # If the column has '%' in its name but values are not between 0-1,
+                # divide by 100 to normalize
+                if '%' in col and df_norm[col].max() > 1:
+                    df_norm[col] = df_norm[col] / 100.0
+        
+        # Replace NaN values with reasonable defaults
+        for col in df_norm.columns:
+            if col not in [team_col, 'team_name_lower', 'Conference']:
+                if df_norm[col].isna().any():
+                    # Choose sensible defaults based on the statistic
+                    if col in ['AdjO', 'AdjD']:
+                        df_norm[col].fillna(100.0, inplace=True)
+                    elif '%' in col:
+                        df_norm[col].fillna(0.5, inplace=True)
+                    else:
+                        # For other metrics, use the column mean
+                        col_mean = df_norm[col].mean()
+                        if pd.isna(col_mean):  # If mean is also NaN, use a reasonable default
+                            col_mean = 0.5
+                        df_norm[col].fillna(col_mean, inplace=True)
+        
+        return df_norm
+    
+    def get_conference_tier(self, conference):
+        """
+        Get the tier ranking for a conference
+        
+        Args:
+            conference (str): Conference name
+            
+        Returns:
+            int: Tier ranking (1-5, with 1 being highest)
+        """
+        if conference in self.conference_tiers:
+            return self.conference_tiers[conference]
+        else:
+            # Default to mid-tier if conference not found
+            return 3
+
+    def calculate_home_advantage(self, home_team_stats):
+        """
+        Calculate home court advantage factor
+        
+        Args:
+            home_team_stats (Series): Statistics for the home team
+            
+        Returns:
+            float: Home court advantage factor (0.0-0.1)
+        """
+        # Base home court advantage (3-4%)
+        advantage = 0.035
+        
+        # Adjust based on conference if available
+        if 'Conference' in home_team_stats:
+            conference = home_team_stats['Conference']
+            conference_tier = self.get_conference_tier(conference)
+            
+            # Higher tier conferences tend to have stronger home court advantage
+            tier_adjustment = (6 - conference_tier) * 0.005  # 0.005 to 0.025
+            advantage += tier_adjustment
+        
+        # Add random variation (±1%)
+        advantage += np.random.normal(0, 0.01)
+        
+        # Ensure advantage is within reasonable bounds
+        advantage = max(0.02, min(0.08, advantage))
+        
+        return advantage
+    
+    def check_team_exists(self, team_name):
+        """
+        Check if a team exists in the loaded statistics
+        
+        Args:
+            team_name (str): Name of the team to check
+            
+        Returns:
+            bool: True if team exists, False otherwise
+        """
+        if self.team_stats is None:
+            self.load_team_stats()
+        
+        # Try exact match first
+        if team_name in self.team_stats.index:
+            return True
+        
+        # Try lowercase match
+        if team_name.lower() in self.team_stats.index:
+            return True
+        
+        # Try partial match
+        for team in self.team_stats.index:
+            if team_name.lower() in team.lower():
+                return True
+        
+        return False
+    
+    def find_similar_teams(self, team_name, threshold=0.6):
+        """
+        Find teams with similar names
+        
+        Args:
+            team_name (str): Name to search for
+            threshold (float): Similarity threshold (0-1)
+            
+        Returns:
+            list: List of similar team names
+        """
+        if self.team_stats is None:
+            self.load_team_stats()
+        
+        team_name = team_name.lower()
+        similar_teams = []
+        
+        # First try direct substring match
+        for team in self.team_stats.index:
+            if team_name in team.lower() or team.lower() in team_name:
+                similar_teams.append(team)
+        
+        # If no direct matches, try fuzzy matching
+        if not similar_teams:
+            for team in self.team_stats.index:
+                similarity = difflib.SequenceMatcher(None, team_name, team.lower()).ratio()
+                if similarity >= threshold:
+                    similar_teams.append(team)
+        
+        # Sort by similarity (most similar first)
+        similar_teams.sort(key=lambda x: difflib.SequenceMatcher(None, team_name, x.lower()).ratio(), reverse=True)
+        
+        return similar_teams
+    
+    def get_team_form(self, team_name):
+        """
+        Get a team's current form (momentum)
+        
+        Args:
+            team_name (str): Name of the team
+            
+        Returns:
+            float: Form factor (-1.0 to 1.0, with 1.0 being excellent form)
+        """
+        # In a real implementation, this would use recent game results
+        # For now, generate a random form value with slight bias toward average
+        form = np.random.normal(0, 0.5)
+        
+        # Clamp to reasonable range
+        form = max(-1.0, min(1.0, form))
+        
+        return form
+    
+    def is_rivalry_game(self, team1, team2):
+        """
+        Check if two teams are rivals
+        
+        Args:
+            team1 (str): First team name
+            team2 (str): Second team name
+            
+        Returns:
+            bool: True if teams are rivals, False otherwise
+        """
+        # Normalize team names
+        team1 = team1.strip()
+        team2 = team2.strip()
+        
+        # Check if teams are in the rivalry list (in either order)
+        if (team1, team2) in self.rivalries or (team2, team1) in self.rivalries:
+            return True
+        
+        # Check for partial matches
+        for rivalry in self.rivalries:
+            # Check if both teams partially match a rivalry pair
+            t1_match = (team1.lower() in rivalry[0].lower() or rivalry[0].lower() in team1.lower())
+            t2_match = (team2.lower() in rivalry[1].lower() or rivalry[1].lower() in team2.lower())
+            
+            if (t1_match and t2_match):
+                return True
+            
+            # Check the reverse order
+            t1_match = (team1.lower() in rivalry[1].lower() or rivalry[1].lower() in team1.lower())
+            t2_match = (team2.lower() in rivalry[0].lower() or rivalry[0].lower() in team2.lower())
+            
+            if (t1_match and t2_match):
+                return True
+        
+        # Also check conference rivals for teams in the same conference
+        try:
+            team1_stats = self.team_stats.loc[team1]
+            team2_stats = self.team_stats.loc[team2]
+            
+            if 'Conference' in team1_stats and 'Conference' in team2_stats:
+                if team1_stats['Conference'] == team2_stats['Conference']:
+                    # Same conference - calculate chance of being rivals
+                    conference_tier = self.get_conference_tier(team1_stats['Conference'])
+                    # Lower tier conferences have stronger internal rivalries
+                    rivalry_chance = 0.2 - (conference_tier * 0.03)
+                    
+                    # Random chance of being conference rivals
+                    if random.random() < rivalry_chance:
+                        return True
+        except:
+            # If there's an error accessing team stats, just continue
+            pass
+        
+        return False
+    
+    def calculate_team_strength(self, team_stats):
+        """
+        Calculate overall team strength based on weighted statistics
+        
+        Args:
+            team_stats (Series): Team statistics
+            
+        Returns:
+            float: Overall team strength value
+        """
+        strength = 0.0
+        valid_stats = 0
+        missing_stats = []
+        
+        for stat, weight in self.weights.items():
+            if stat in team_stats and not pd.isna(team_stats[stat]):
+                # For AdjO and AdjD, use directly (they're already on a common scale)
+                if stat in ['AdjO', 'AdjD']:
+                    value = team_stats[stat]
+                elif stat == 'AdjD':
+                    # For defensive rating, lower is better, so invert the contribution
+                    value = 200 - team_stats[stat]
+                # For percentage stats, multiply by 100 to get on similar scale
+                elif '%' in stat:
+                    value = team_stats[stat] * 100
+                else:
+                    value = team_stats[stat]
+                
+                # Add weighted contribution to strength
+                strength += value * weight
+                valid_stats += 1
+            else:
+                missing_stats.append(stat)
+        
+        # Adjust if not all stats were available
+        if valid_stats < len(self.weights):
+            strength = strength * (len(self.weights) / valid_stats)
+        
+        # Only print missing stats debug info once
+        if missing_stats and not hasattr(self, '_printed_stats_debug'):
+            if len(missing_stats) > 5:
+                print(f"Warning: Missing many statistics: {len(missing_stats)} stats")
+            else:
+                print(f"Warning: Missing statistics: {', '.join(missing_stats)}")
+            self._printed_stats_debug = True
+        
+        return strength
+    
     def simulate_game(self, team1, team2, neutral_court=False):
         """
         Simulate a single game between two teams
@@ -478,3 +790,33 @@ class NcaaGameSimulatorV4:
                 team2_final += 1
         
         return team1_final, team2_final, is_overtime
+
+    def create_realistic_score(self, raw_score):
+        """
+        Convert a raw score to a realistic basketball score with natural distribution
+        """
+        # Instead of a hard minimum, use a "soft minimum" approach
+        # This gradually increases probability of higher scores when raw_score is low
+        if raw_score < 60:
+            # Apply a logarithmic transformation to low scores
+            # This spreads out the scores below our target minimum instead of clustering them
+            boost_factor = 1.0 - (raw_score / 60)  # 0 to 1 scale for how far below minimum
+            boost_amount = boost_factor * 12  # Up to 12 points of boost (reduced from 15)
+            
+            # Add random boost based on how far below minimum (higher boost for lower scores)
+            raw_score += boost_amount * random.random()
+        
+        # Apply normal distribution adjustment centered around realistic scores
+        # NCAA average score is around 71-73 in recent seasons
+        college_mean = 72  # More moderate average (reduced from 75)
+        raw_score = raw_score * 0.9 + college_mean * 0.1  # 10% regression to mean (reduced from 20%)
+        
+        # Round to integer, but keep decimal part for last-digit probability
+        score_whole = int(raw_score)
+        score_fraction = raw_score - score_whole
+        
+        # Use decimal part to potentially round up (creates more natural distribution of final digits)
+        if random.random() < score_fraction:
+            score_whole += 1
+        
+        return score_whole
