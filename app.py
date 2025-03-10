@@ -10,7 +10,7 @@ import base64
 from io import BytesIO
 import requests
 
-# Import simulator classes - removed V2 as requested
+# Import simulator classes - V2 removed completely
 from ncaa_simv3 import NcaaGameSimulatorV3
 from ncaa_simv4 import NcaaGameSimulatorV4
 
@@ -41,12 +41,12 @@ def main():
     # Create sidebar for simulation settings
     st.sidebar.header("Simulation Settings")
     
-    # Add option to choose simulator version - removed V2 and made V4 the default
+    # Only V3 and V4 options available, with V4 as default
     simulator_version = st.sidebar.radio(
         "Simulator Version",
         ["Premium (V4)", "Advanced (V3)"],
         index=0,  # Default to V4
-        help="Premium: Latest version with additional refinements and improved accuracy. Advanced: Enhanced model with rivalry detection, team form tracking, and improved outcome predictions."
+        help="Premium (V4): Latest version with additional refinements and improved accuracy. Advanced (V3): Enhanced model with rivalry detection and team form tracking."
     )
     
     num_simulations = st.sidebar.slider(
@@ -87,7 +87,7 @@ def main():
     
     progress_bar.progress(75)
     
-    # Initialize simulator based on version - removed V2 option
+    # Initialize simulator based on version - only V3 and V4 options
     try:
         if simulator_version == "Premium (V4)":
             simulator = NcaaGameSimulatorV4(stats_dir="stats")
