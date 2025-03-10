@@ -10,8 +10,7 @@ import base64
 from io import BytesIO
 import requests
 
-# Import simulator classes
-from ncaa_simv2 import NcaaGameSimulatorV2
+# Import simulator classes - removed V2 as requested
 from ncaa_simv3 import NcaaGameSimulatorV3
 from ncaa_simv4 import NcaaGameSimulatorV4
 
@@ -42,12 +41,12 @@ def main():
     # Create sidebar for simulation settings
     st.sidebar.header("Simulation Settings")
     
-    # Add option to choose simulator version
+    # Add option to choose simulator version - removed V2 and made V4 the default
     simulator_version = st.sidebar.radio(
         "Simulator Version",
-        ["Standard (V2)", "Advanced (V3)", "Premium (V4)"],
-        index=0,  # Default to V2
-        help="Standard: Basic simulator with fundamental team metrics. Advanced: Enhanced model with rivalry detection, team form tracking, and improved outcome predictions. Premium: Latest version with additional refinements."
+        ["Premium (V4)", "Advanced (V3)"],
+        index=0,  # Default to V4
+        help="Premium: Latest version with additional refinements and improved accuracy. Advanced: Enhanced model with rivalry detection, team form tracking, and improved outcome predictions."
     )
     
     num_simulations = st.sidebar.slider(
@@ -88,17 +87,14 @@ def main():
     
     progress_bar.progress(75)
     
-    # Initialize simulator based on version
+    # Initialize simulator based on version - removed V2 option
     try:
-        if simulator_version == "Standard (V2)":
-            simulator = NcaaGameSimulatorV2(stats_dir="stats")
-            st.sidebar.info("Using Standard simulator (V2)")
-        elif simulator_version == "Advanced (V3)":
-            simulator = NcaaGameSimulatorV3(stats_dir="stats")
-            st.sidebar.info("Using Advanced simulator (V3) with improved accuracy")
-        else:
+        if simulator_version == "Premium (V4)":
             simulator = NcaaGameSimulatorV4(stats_dir="stats")
             st.sidebar.info("Using Premium simulator (V4) with latest enhancements")
+        else:  # Advanced (V3)
+            simulator = NcaaGameSimulatorV3(stats_dir="stats")
+            st.sidebar.info("Using Advanced simulator (V3) with improved accuracy")
     except Exception as e:
         st.error(f"Error initializing simulator: {str(e)}")
         st.stop()
